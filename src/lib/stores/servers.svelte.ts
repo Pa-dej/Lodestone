@@ -1,0 +1,269 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type {
+  ConsoleEntry,
+  ConsoleLine,
+  CoreType,
+  DownloadProgress,
+  NewServerConfig,
+  ServerConfig,
+} from "$lib/types";
+import { toConsoleEntry } from "$lib/utils/console";
+
+interface ServerStoreState {
+  servers: ServerConfig[];
+  loading: boolean;
+  error: string | null;
+  activeConsoleServer: string | null;
+  consoleTabs: string[];
+  consoleLines: Record<string, ConsoleEntry[]>;
+  commandHistoryByServer: Record<string, string[]>;
+  autoScrollByServer: Record<string, boolean>;
+  creating: boolean;
+  createError: string | null;
+  download: DownloadProgress | null;
+}
+
+const MAX_CONSOLE_LINES = 2500;
+
+export const serverState = $state<ServerStoreState>({
+  servers: [],
+  loading: false,
+  error: null,
+  activeConsoleServer: null,
+  consoleTabs: [],
+  consoleLines: {},
+  commandHistoryByServer: {},
+  autoScrollByServer: {},
+  creating: false,
+  createError: null,
+  download: null,
+});
+
+let consoleUnlisten: UnlistenFn | null = null;
+let downloadUnlisten: UnlistenFn | null = null;
+let pollHandle: ReturnType<typeof setInterval> | null = null;
+
+function setServerError(error: unknown): void {
+  serverState.error = error instanceof Error ? error.message : String(error);
+}
+
+function updateConsoleLines(serverId: string, nextLines: ConsoleEntry[]): void {
+  serverState.consoleLines = {
+    ...serverState.consoleLines,
+    [serverId]: nextLines,
+  };
+}
+
+function appendConsoleLine(payload: ConsoleLine): void {
+  const entry = toConsoleEntry(payload);
+  const existing = serverState.consoleLines[payload.server_id] ?? [];
+  const last = existing.at(-1);
+
+  if (last && last.raw === entry.raw) {
+    const dedupedLast: ConsoleEntry = {
+      ...last,
+      repeats: last.repeats + 1,
+      timestamp: entry.timestamp,
+      timestampLabel: entry.timestampLabel,
+    };
+    updateConsoleLines(payload.server_id, [...existing.slice(0, -1), dedupedLast]);
+    return;
+  }
+
+  const combined = [...existing, entry];
+  const clipped = combined.length > MAX_CONSOLE_LINES ? combined.slice(-MAX_CONSOLE_LINES) : combined;
+  updateConsoleLines(payload.server_id, clipped);
+}
+
+async function ensureEventListeners(): Promise<void> {
+  if (!consoleUnlisten) {
+    consoleUnlisten = await listen<ConsoleLine>("console_line", ({ payload }) => {
+      appendConsoleLine(payload);
+    });
+  }
+
+  if (!downloadUnlisten) {
+    downloadUnlisten = await listen<DownloadProgress>("download_progress", ({ payload }) => {
+      serverState.download = payload;
+    });
+  }
+}
+
+export async function initServers(): Promise<void> {
+  await ensureEventListeners();
+  await loadServers();
+}
+
+export async function loadServers(): Promise<void> {
+  serverState.loading = true;
+  serverState.error = null;
+  try {
+    const list = await invoke<ServerConfig[]>("list_servers");
+    serverState.servers = list;
+  } catch (error) {
+    setServerError(error);
+  } finally {
+    serverState.loading = false;
+  }
+}
+
+export function startPollingServers(): void {
+  if (pollHandle) {
+    return;
+  }
+
+  pollHandle = setInterval(() => {
+    void loadServers();
+  }, 5000);
+}
+
+export function stopPollingServers(): void {
+  if (!pollHandle) {
+    return;
+  }
+  clearInterval(pollHandle);
+  pollHandle = null;
+}
+
+export async function createServer(config: NewServerConfig): Promise<ServerConfig | null> {
+  serverState.creating = true;
+  serverState.createError = null;
+  try {
+    const created = await invoke<ServerConfig>("create_server", { config });
+    serverState.servers = [...serverState.servers, created];
+    return created;
+  } catch (error) {
+    serverState.createError = error instanceof Error ? error.message : String(error);
+    return null;
+  } finally {
+    serverState.creating = false;
+  }
+}
+
+export async function startServer(id: string): Promise<void> {
+  serverState.error = null;
+  try {
+    await invoke("start_server", { id });
+    await loadServers();
+  } catch (error) {
+    setServerError(error);
+  }
+}
+
+export async function stopServer(id: string): Promise<void> {
+  serverState.error = null;
+  try {
+    await invoke("stop_server", { id });
+    await loadServers();
+  } catch (error) {
+    setServerError(error);
+  }
+}
+
+export async function deleteServer(id: string): Promise<void> {
+  serverState.error = null;
+  try {
+    await invoke("delete_server", { id });
+    const tabs = serverState.consoleTabs.filter((tab) => tab !== id);
+    serverState.consoleTabs = tabs;
+    if (serverState.activeConsoleServer === id) {
+      serverState.activeConsoleServer = tabs[0] ?? null;
+    }
+    await loadServers();
+  } catch (error) {
+    setServerError(error);
+  }
+}
+
+export async function sendServerCommand(id: string, command: string): Promise<void> {
+  serverState.error = null;
+  try {
+    await invoke("send_command", { id, command });
+    const trimmed = command.trim();
+    if (trimmed.length > 0) {
+      const existing = serverState.commandHistoryByServer[id] ?? [];
+      const deduped = existing.filter((entry) => entry !== trimmed);
+      const next = [...deduped, trimmed].slice(-80);
+      serverState.commandHistoryByServer = {
+        ...serverState.commandHistoryByServer,
+        [id]: next,
+      };
+    }
+  } catch (error) {
+    setServerError(error);
+  }
+}
+
+export async function fetchVersions(core: CoreType): Promise<string[]> {
+  try {
+    return await invoke<string[]>("fetch_versions", { core });
+  } catch (error) {
+    setServerError(error);
+    return [];
+  }
+}
+
+export async function attachConsole(id: string): Promise<void> {
+  try {
+    await invoke("attach_console", { id });
+  } catch (error) {
+    setServerError(error);
+  }
+}
+
+export function openConsoleTab(id: string): void {
+  if (!serverState.consoleTabs.includes(id)) {
+    serverState.consoleTabs = [...serverState.consoleTabs, id];
+  }
+  serverState.activeConsoleServer = id;
+
+  if (serverState.autoScrollByServer[id] === undefined) {
+    serverState.autoScrollByServer = {
+      ...serverState.autoScrollByServer,
+      [id]: true,
+    };
+  }
+}
+
+export function closeConsoleTab(id: string): void {
+  const tabs = serverState.consoleTabs.filter((tab) => tab !== id);
+  serverState.consoleTabs = tabs;
+  if (serverState.activeConsoleServer === id) {
+    serverState.activeConsoleServer = tabs[0] ?? null;
+  }
+}
+
+export function clearConsole(serverId: string): void {
+  updateConsoleLines(serverId, []);
+}
+
+export function getCommandHistory(serverId: string): string[] {
+  return serverState.commandHistoryByServer[serverId] ?? [];
+}
+
+export function setAutoScroll(serverId: string, enabled: boolean): void {
+  serverState.autoScrollByServer = {
+    ...serverState.autoScrollByServer,
+    [serverId]: enabled,
+  };
+}
+
+export function getServerById(id: string | null): ServerConfig | null {
+  if (!id) {
+    return null;
+  }
+  return serverState.servers.find((server) => server.id === id) ?? null;
+}
+
+export function shutdownServerStore(): void {
+  stopPollingServers();
+  if (consoleUnlisten) {
+    void consoleUnlisten();
+    consoleUnlisten = null;
+  }
+  if (downloadUnlisten) {
+    void downloadUnlisten();
+    downloadUnlisten = null;
+  }
+}

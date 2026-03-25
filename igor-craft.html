@@ -1,0 +1,1665 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Igor / Craft — Design System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,300&display=swap" rel="stylesheet">
+<style>
+
+/* ============================================================
+   IGOR / CRAFT — DESIGN SYSTEM
+   Основа: тёмное дерево. Акцент: выбирается по проекту.
+   ============================================================ */
+
+:root {
+  /* Основа тёмная */
+  --bg:          #1A1713;
+  --surface:     #221E1A;
+  --surface-2:   #2E2922;
+  --border:      #3D3630;
+  --border-soft: #2E2922;
+  --text:        #F0EBE3;
+  --text-muted:  #8A8178;
+  --text-hint:   #4F4842;
+
+  /* Акцент по умолчанию: Янтарь */
+  --accent:      #C8922A;
+  --accent-bg:   #2A1F0A;
+  --accent-on:   #1A1713;
+  --accent-glow: rgba(200, 146, 42, 0.12);
+
+  /* Типографика */
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-mono:    'DM Mono', monospace;
+
+  /* Радиусы */
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 12px;
+
+  /* Переходы */
+  --tr: 0.15s ease;
+}
+
+[data-theme="light"] {
+  --bg:          #F5F2ED;
+  --surface:     #EDE9E2;
+  --surface-2:   #E0DCD4;
+  --border:      #CCC7BE;
+  --border-soft: #DDD8D0;
+  --text:        #1A1713;
+  --text-muted:  #6B6560;
+  --text-hint:   #A8A39C;
+  --accent-bg:   #FBF3E4;
+  --accent-on:   #fff;
+  --accent-glow: rgba(200, 146, 42, 0.08);
+}
+
+/* Акценты */
+[data-accent="amber"]  { --accent: #C8922A; --accent-bg: #2A1F0A; --accent-lbg: #FBF3E4; }
+[data-accent="rust"]   { --accent: #C4603A; --accent-bg: #2A1208; --accent-lbg: #FAF0EB; }
+[data-accent="pine"]   { --accent: #5A9E6A; --accent-bg: #0E2014; --accent-lbg: #EBF5EE; }
+[data-accent="steel"]  { --accent: #6A9EC4; --accent-bg: #0A1E2E; --accent-lbg: #E8F2FB; }
+[data-accent="lavender"]{ --accent: #9A7EC4; --accent-bg: #1A1030; --accent-lbg: #F2EEFB; }
+
+[data-theme="light"][data-accent="amber"]   { --accent: #A87520; --accent-bg: #FBF3E4; }
+[data-theme="light"][data-accent="rust"]    { --accent: #A04A2A; --accent-bg: #FAF0EB; }
+[data-theme="light"][data-accent="pine"]    { --accent: #3D7A4C; --accent-bg: #EBF5EE; }
+[data-theme="light"][data-accent="steel"]   { --accent: #3E7AA8; --accent-bg: #E8F2FB; }
+[data-theme="light"][data-accent="lavender"]{ --accent: #7458A8; --accent-bg: #F2EEFB; }
+
+/* ============================================================
+   RESET & BASE
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+  transition: background var(--tr), color var(--tr);
+}
+
+/* ============================================================
+   LAYOUT
+   ============================================================ */
+.page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 2rem 6rem;
+}
+
+/* ============================================================
+   ТОПБАР
+   ============================================================ */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--bg);
+  border-bottom: 0.5px solid var(--border-soft);
+  padding: 0 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 52px;
+}
+
+.topbar-logo {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 300;
+  font-style: italic;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.topbar-logo span {
+  color: var(--accent);
+  font-style: normal;
+}
+
+.topbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ============================================================
+   СЕКЦИИ
+   ============================================================ */
+.section {
+  padding: 3rem 0 0;
+}
+
+.section-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+
+.section-title {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 300;
+  font-style: italic;
+  color: var(--text);
+  margin-bottom: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+.divider {
+  height: 0.5px;
+  background: var(--border);
+  margin: 2.5rem 0;
+}
+
+/* ============================================================
+   АКЦЕНТ-ПЕРЕКЛЮЧАТЕЛЬ
+   ============================================================ */
+.accent-switcher {
+  display: flex;
+  gap: 6px;
+}
+
+.accent-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: transform var(--tr), border-color var(--tr);
+  flex-shrink: 0;
+}
+.accent-dot:hover { transform: scale(1.2); }
+.accent-dot.on { border-color: var(--text); }
+
+/* ============================================================
+   ТЕМА-ПЕРЕКЛЮЧАТЕЛЬ
+   ============================================================ */
+.theme-toggle {
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 0.5px solid var(--border);
+  cursor: pointer;
+  position: relative;
+  transition: background var(--tr);
+  flex-shrink: 0;
+}
+.theme-toggle::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  top: 2px;
+  left: 2px;
+  transition: transform var(--tr), background var(--tr);
+}
+[data-theme="light"] .theme-toggle::after { transform: translateX(16px); }
+
+/* ============================================================
+   HERO
+   ============================================================ */
+.hero {
+  padding: 4rem 0 2rem;
+  border-bottom: 0.5px solid var(--border-soft);
+}
+
+.hero-eyebrow {
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text-hint);
+  margin-bottom: 1rem;
+}
+
+.hero-title {
+  font-family: var(--font-display);
+  font-size: clamp(40px, 7vw, 72px);
+  font-weight: 300;
+  font-style: italic;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  color: var(--text);
+  margin-bottom: 1.5rem;
+}
+
+.hero-title em {
+  color: var(--accent);
+  font-style: normal;
+}
+
+.hero-sub {
+  color: var(--text-muted);
+  font-size: 13px;
+  max-width: 480px;
+  line-height: 1.7;
+}
+
+/* ============================================================
+   COLOR TOKENS
+   ============================================================ */
+.token-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  margin-bottom: 1rem;
+}
+
+.token-swatch {
+  aspect-ratio: 1;
+  border-radius: var(--r-md);
+  border: 0.5px solid rgba(128,128,128,0.1);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 6px;
+  cursor: default;
+}
+
+.token-swatch-hex {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  line-height: 1.3;
+  word-break: break-all;
+}
+
+.token-swatch-name {
+  font-size: 9px;
+  opacity: 0.6;
+  margin-top: 2px;
+}
+
+.accent-swatches {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.accent-swatch {
+  flex: 1;
+  height: 48px;
+  border-radius: var(--r-md);
+  display: flex;
+  align-items: flex-end;
+  padding: 6px 8px;
+  font-size: 9px;
+  font-family: var(--font-mono);
+  color: rgba(240,235,227,0.8);
+  font-weight: 500;
+  transition: opacity var(--tr);
+  border: 0.5px solid rgba(255,255,255,0.06);
+}
+
+/* ============================================================
+   ТИПОГРАФИКА
+   ============================================================ */
+.type-samples { display: flex; flex-direction: column; gap: 1.2rem; }
+
+.type-row {
+  display: flex;
+  align-items: baseline;
+  gap: 1.5rem;
+  padding-bottom: 1.2rem;
+  border-bottom: 0.5px solid var(--border-soft);
+}
+.type-row:last-child { border-bottom: none; }
+
+.type-meta {
+  width: 120px;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-hint);
+  line-height: 1.4;
+}
+.type-meta strong { color: var(--text-muted); display: block; margin-bottom: 2px; }
+
+/* ============================================================
+   КНОПКИ
+   ============================================================ */
+.btn-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 18px;
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 400;
+  cursor: pointer;
+  border: none;
+  transition: opacity var(--tr), transform var(--tr), background var(--tr);
+  letter-spacing: 0.01em;
+  text-decoration: none;
+}
+.btn:active { transform: scale(0.97); }
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-on);
+}
+.btn-primary:hover { opacity: 0.88; }
+
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 0.5px solid var(--border);
+}
+.btn-secondary:hover { background: var(--border); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+  border: 0.5px solid var(--border);
+}
+.btn-ghost:hover { color: var(--text); border-color: var(--text-hint); }
+
+.btn-accent-ghost {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border: 0.5px solid var(--accent);
+}
+.btn-accent-ghost:hover { opacity: 0.82; }
+
+.btn-danger {
+  background: transparent;
+  color: #C46060;
+  border: 0.5px solid #C46060;
+}
+.btn-danger:hover { background: rgba(196,96,96,0.08); }
+
+.btn-sm { padding: 6px 12px; font-size: 12px; }
+.btn-lg { padding: 12px 24px; font-size: 14px; }
+
+.btn-icon {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 0.5px solid var(--border);
+  cursor: pointer;
+  font-size: 15px;
+  transition: background var(--tr), color var(--tr);
+}
+.btn-icon:hover { background: var(--border); color: var(--text); }
+
+/* ============================================================
+   ИНПУТЫ
+   ============================================================ */
+.input-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.input {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 9px 12px;
+  outline: none;
+  transition: border-color var(--tr), background var(--tr);
+  width: 100%;
+}
+.input::placeholder { color: var(--text-hint); }
+.input:hover { border-color: var(--text-hint); }
+.input:focus { border-color: var(--accent); background: var(--surface-2); }
+
+.input-error { border-color: #C46060 !important; }
+.field-hint { font-size: 11px; color: var(--text-hint); }
+.field-hint.error { color: #C46060; }
+
+textarea.input { resize: vertical; min-height: 80px; }
+
+.select-wrap { position: relative; }
+.select-wrap::after {
+  content: '▾';
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-hint);
+  pointer-events: none;
+  font-size: 12px;
+  transition: transform 0.18s ease, color 0.15s ease;
+}
+.select-wrap.open::after {
+  transform: translateY(-50%) rotate(180deg);
+  color: var(--accent);
+}
+select.input { appearance: none; cursor: pointer; padding-right: 32px; }
+
+/* Кастомный дропдаун */
+.custom-select { position: relative; }
+.custom-select-trigger {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 9px 32px 9px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  position: relative;
+  width: 100%;
+}
+.custom-select-trigger:hover { border-color: var(--text-hint); }
+.custom-select.open .custom-select-trigger {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.custom-select-arrow {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  transition: transform 0.2s cubic-bezier(0.34,1.2,0.64,1), color 0.15s ease;
+}
+.custom-select.open .custom-select-arrow {
+  transform: translateY(-50%) rotate(180deg);
+  color: var(--accent);
+}
+.custom-select-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  z-index: 200;
+  opacity: 0;
+  transform: translateY(-6px) scaleY(0.92);
+  transform-origin: top center;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.2s cubic-bezier(0.34,1.2,0.64,1);
+}
+.custom-select.open .custom-select-dropdown {
+  opacity: 1;
+  transform: translateY(0) scaleY(1);
+  pointer-events: all;
+}
+.custom-select-option {
+  padding: 9px 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.custom-select-option:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.custom-select-option.selected {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+.custom-select-option.selected::before {
+  content: '';
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.custom-select-option:not(.selected)::before {
+  content: '';
+  width: 4px;
+  height: 4px;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   ЧЕКБОКСЫ И РАДИО
+   ============================================================ */
+.check-group, .radio-group { display: flex; flex-direction: column; gap: 10px; }
+
+.check-item, .radio-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.check-box {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--r-sm);
+  border: 0.5px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--tr), border-color var(--tr);
+  cursor: pointer;
+}
+.check-box.checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.check-box.checked::after {
+  content: '';
+  width: 10px;
+  height: 7px;
+  border-left: 1.5px solid var(--accent-on);
+  border-bottom: 1.5px solid var(--accent-on);
+  transform: rotate(-45deg) translateY(-1px);
+  display: block;
+}
+
+.check-box.indeterminate {
+  background: var(--accent-bg);
+  border-color: var(--accent);
+}
+.check-box.indeterminate::after {
+  content: '';
+  width: 9px;
+  height: 1.5px;
+  background: var(--accent);
+  display: block;
+}
+
+.radio-circle {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 0.5px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.2s ease;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+.radio-circle.checked { border-color: var(--accent); }
+.radio-circle::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: block;
+  transform: scale(0);
+  opacity: 0;
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.18s ease;
+}
+.radio-circle.checked::after {
+  transform: scale(1);
+  opacity: 1;
+}
+.radio-circle.unchecking::after {
+  transform: scale(0);
+  opacity: 0;
+  transition: transform 0.16s ease, opacity 0.14s ease;
+}
+
+.check-label { font-size: 13px; color: var(--text); }
+.check-label.muted { color: var(--text-muted); }
+
+/* ============================================================
+   СЛАЙДЕРЫ (кастомные — плавный трек)
+   ============================================================ */
+.slider-group { display: flex; flex-direction: column; gap: 1.2rem; }
+.slider-row { display: flex; flex-direction: column; gap: 6px; }
+.slider-header { display: flex; justify-content: space-between; align-items: center; }
+.slider-name { font-size: 12px; color: var(--text-muted); }
+.slider-val { font-size: 12px; color: var(--accent); font-weight: 500; font-family: var(--font-mono); }
+
+.cslider {
+  position: relative;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+.cslider-track {
+  position: absolute;
+  left: 0; right: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.cslider-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  width: 0%;
+  /* Нет transition — трек двигается синхронно с пальцем/курсором */
+}
+.cslider-thumb {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  transform: translateX(-50%);
+  transition: box-shadow 0.15s ease, transform 0.1s ease;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+.cslider:hover .cslider-thumb,
+.cslider.dragging .cslider-thumb {
+  box-shadow: 0 0 0 5px var(--accent-glow);
+}
+.cslider.dragging .cslider-thumb {
+  transform: translateX(-50%) scale(1.15);
+}
+
+/* ============================================================
+   ТОГЛ
+   ============================================================ */
+.toggle-group { display: flex; flex-direction: column; gap: 12px; }
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.toggle-info { display: flex; flex-direction: column; gap: 2px; }
+.toggle-name { font-size: 13px; color: var(--text); }
+.toggle-desc { font-size: 11px; color: var(--text-hint); }
+
+.toggle {
+  width: 38px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--surface-2);
+  border: 0.5px solid var(--border);
+  cursor: pointer;
+  position: relative;
+  transition: background var(--tr), border-color var(--tr);
+  flex-shrink: 0;
+}
+.toggle::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-hint);
+  top: 2px;
+  left: 2px;
+  transition: transform var(--tr), background var(--tr);
+}
+.toggle.on { background: var(--accent-bg); border-color: var(--accent); }
+.toggle.on::after { transform: translateX(16px); background: var(--accent); }
+
+/* ============================================================
+   БЕЙДЖИ И ТЕГИ
+   ============================================================ */
+.badge-grid { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.badge-accent  { background: var(--accent-bg);            color: var(--accent); border: 0.5px solid var(--accent); }
+.badge-muted   { background: var(--surface-2);            color: var(--text-muted); border: 0.5px solid var(--border); }
+.badge-success { background: rgba(90,158,106,0.12);       color: #5A9E6A; border: 0.5px solid rgba(90,158,106,0.3); }
+.badge-warning { background: rgba(200,146,42,0.12);       color: #C8922A; border: 0.5px solid rgba(200,146,42,0.3); }
+.badge-danger  { background: rgba(196,96,96,0.1);         color: #C46060; border: 0.5px solid rgba(196,96,96,0.25); }
+.badge-info    { background: rgba(106,158,196,0.12);      color: #6A9EC4; border: 0.5px solid rgba(106,158,196,0.3); }
+.badge-dot::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 0.5px solid var(--border);
+  cursor: default;
+}
+
+/* ============================================================
+   КАРТОЧКИ
+   ============================================================ */
+.card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+
+.card {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 1.25rem;
+  transition: border-color var(--tr);
+}
+.card:hover { border-color: var(--text-hint); }
+
+.card-accent {
+  border-left: 2px solid var(--accent);
+  padding-left: calc(1.25rem - 1.5px);
+}
+
+.card-title {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 300;
+  font-style: italic;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.card-body { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 1rem; }
+.card-footer { display: flex; align-items: center; justify-content: space-between; }
+.card-meta { font-size: 11px; color: var(--text-hint); }
+
+/* ============================================================
+   ПРОГРЕСС-БАРЫ
+   ============================================================ */
+.progress-group { display: flex; flex-direction: column; gap: 1rem; }
+
+.progress-row { display: flex; flex-direction: column; gap: 5px; }
+.progress-header { display: flex; justify-content: space-between; }
+.progress-label { font-size: 12px; color: var(--text-muted); }
+.progress-pct { font-size: 12px; color: var(--accent); font-weight: 500; }
+
+.progress-track {
+  height: 4px;
+  background: var(--surface-2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.6s ease;
+}
+.progress-fill.muted { background: var(--text-hint); }
+.progress-fill.success { background: #5A9E6A; }
+
+/* ============================================================
+   ТАБЛИЦА
+   ============================================================ */
+.table-wrap {
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+thead { background: var(--surface-2); }
+th {
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-hint);
+  border-bottom: 0.5px solid var(--border);
+}
+td {
+  padding: 10px 14px;
+  color: var(--text-muted);
+  border-bottom: 0.5px solid var(--border-soft);
+  transition: background 0.18s ease, color 0.18s ease;
+}
+tr:last-child td { border-bottom: none; }
+tbody tr { transition: background 0.18s ease; }
+tbody tr:hover td { background: var(--surface-2); }
+td.text-primary { color: var(--text); }
+td.text-accent { color: var(--accent); font-weight: 500; }
+
+/* ============================================================
+   УВЕДОМЛЕНИЯ / АЛЕРТЫ
+   ============================================================ */
+.alert-group { display: flex; flex-direction: column; gap: 8px; }
+
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  font-size: 13px;
+  line-height: 1.5;
+  border: 0.5px solid;
+}
+.alert-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+.alert-text { flex: 1; }
+.alert-title { font-weight: 500; margin-bottom: 2px; }
+.alert-sub { font-size: 12px; opacity: 0.75; }
+
+.alert-info    { background: rgba(106,158,196,0.08); border-color: rgba(106,158,196,0.25); color: #6A9EC4; }
+.alert-success { background: rgba(90,158,106,0.08);  border-color: rgba(90,158,106,0.25);  color: #5A9E6A; }
+.alert-warning { background: rgba(200,146,42,0.08);  border-color: rgba(200,146,42,0.25);  color: #C8922A; }
+.alert-danger  { background: rgba(196,96,96,0.08);   border-color: rgba(196,96,96,0.25);   color: #C46060; }
+
+/* ============================================================
+   КОД
+   ============================================================ */
+.code-block {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 1rem 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--text-muted);
+  overflow-x: auto;
+  position: relative;
+}
+.code-block .kw  { color: var(--accent); }
+.code-block .str { color: #8A9E6A; }
+.code-block .cm  { color: var(--text-hint); }
+.code-block .fn  { color: #6A9EC4; }
+.code-block .num { color: #C8922A; }
+
+/* ============================================================
+   ТУЛБАР РАЗДЕЛА
+   ============================================================ */
+.comp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+.comp-title {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-hint);
+}
+
+/* ============================================================
+   АНИМАЦИЯ ВХОДА
+   ============================================================ */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.section { animation: fadeUp .4s ease both; }
+.section:nth-child(2) { animation-delay: .05s; }
+.section:nth-child(3) { animation-delay: .10s; }
+.section:nth-child(4) { animation-delay: .15s; }
+
+/* ============================================================
+   УТИЛИТЫ
+   ============================================================ */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+.flex    { display: flex; }
+.gap-sm  { gap: 8px; }
+.gap-md  { gap: 1rem; }
+.mt-sm   { margin-top: 8px; }
+.mt-md   { margin-top: 1rem; }
+</style>
+</head>
+<body>
+
+<!-- ТОПБАР -->
+<nav class="topbar">
+  <div class="topbar-logo">Igor<span>/</span>Craft</div>
+  <div class="topbar-controls">
+    <div class="accent-switcher">
+      <div class="accent-dot on" style="background:#C8922A" data-accent="amber"    title="Янтарь"></div>
+      <div class="accent-dot"    style="background:#C4603A" data-accent="rust"     title="Ржавчина"></div>
+      <div class="accent-dot"    style="background:#5A9E6A" data-accent="pine"     title="Хвоя"></div>
+      <div class="accent-dot"    style="background:#6A9EC4" data-accent="steel"    title="Сталь"></div>
+      <div class="accent-dot"    style="background:#9A7EC4" data-accent="lavender" title="Лаванда"></div>
+    </div>
+    <div style="width:0.5px;height:20px;background:var(--border);margin:0 4px"></div>
+    <div class="theme-toggle" id="themeToggle" title="Сменить тему"></div>
+  </div>
+</nav>
+
+<div class="page">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="hero-eyebrow">Design System v1.0</div>
+    <h1 class="hero-title">Craft<br>UI Kit</h1>
+    <p class="hero-sub">Набор компонентов для всех проектов. Одна основа — тёмное дерево. Акцент меняется под задачу.</p>
+  </div>
+
+  <!-- ЦВЕТА -->
+  <div class="section">
+    <div class="section-label">01</div>
+    <h2 class="section-title">Токены цвета</h2>
+
+    <div style="font-size:11px;color:var(--text-hint);margin-bottom:10px">Основа — тёмная тема</div>
+    <div class="token-grid">
+      <div class="token-swatch" style="background:#1A1713">
+        <span class="token-swatch-hex" style="color:#4F4842">#1A1713</span>
+        <span class="token-swatch-name" style="color:#3D3630">--bg</span>
+      </div>
+      <div class="token-swatch" style="background:#221E1A">
+        <span class="token-swatch-hex" style="color:#5A5248">#221E1A</span>
+        <span class="token-swatch-name" style="color:#3D3630">--surface</span>
+      </div>
+      <div class="token-swatch" style="background:#2E2922">
+        <span class="token-swatch-hex" style="color:#6A6058">#2E2922</span>
+        <span class="token-swatch-name" style="color:#4F4842">--surface-2</span>
+      </div>
+      <div class="token-swatch" style="background:#3D3630">
+        <span class="token-swatch-hex" style="color:#8A8178">#3D3630</span>
+        <span class="token-swatch-name" style="color:#6A6058">--border</span>
+      </div>
+      <div class="token-swatch" style="background:#4F4842">
+        <span class="token-swatch-hex" style="color:#8A8178">#4F4842</span>
+        <span class="token-swatch-name" style="color:#8A8178">--hint</span>
+      </div>
+      <div class="token-swatch" style="background:#8A8178">
+        <span class="token-swatch-hex" style="color:#1A1713">#8A8178</span>
+        <span class="token-swatch-name" style="color:#3D3630">--muted</span>
+      </div>
+      <div class="token-swatch" style="background:#F0EBE3">
+        <span class="token-swatch-hex" style="color:#3D3630">#F0EBE3</span>
+        <span class="token-swatch-name" style="color:#8A8178">--text</span>
+      </div>
+    </div>
+
+    <div style="font-size:11px;color:var(--text-hint);margin-top:1rem;margin-bottom:8px">Акценты (один на проект)</div>
+    <div class="accent-swatches">
+      <div class="accent-swatch" style="background:#2A1F0A">
+        <span style="color:#C8922A;font-size:10px">Янтарь<br>#C8922A</span>
+      </div>
+      <div class="accent-swatch" style="background:#2A1208">
+        <span style="color:#C4603A;font-size:10px">Ржавчина<br>#C4603A</span>
+      </div>
+      <div class="accent-swatch" style="background:#0E2014">
+        <span style="color:#5A9E6A;font-size:10px">Хвоя<br>#5A9E6A</span>
+      </div>
+      <div class="accent-swatch" style="background:#0A1E2E">
+        <span style="color:#6A9EC4;font-size:10px">Сталь<br>#6A9EC4</span>
+      </div>
+      <div class="accent-swatch" style="background:#1A1030">
+        <span style="color:#9A7EC4;font-size:10px">Лаванда<br>#9A7EC4</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ТИПОГРАФИКА -->
+  <div class="section">
+    <div class="section-label">02</div>
+    <h2 class="section-title">Типографика</h2>
+    <div class="type-samples">
+      <div class="type-row">
+        <div class="type-meta"><strong>Display</strong>Fraunces<br>italic 300</div>
+        <div style="font-family:var(--font-display);font-size:42px;font-weight:300;font-style:italic;letter-spacing:-0.03em;color:var(--text);line-height:1.05">Craft</div>
+      </div>
+      <div class="type-row">
+        <div class="type-meta"><strong>Heading</strong>Fraunces<br>300 / 24px</div>
+        <div style="font-family:var(--font-display);font-size:24px;font-weight:300;font-style:italic;color:var(--text)">Системный инструмент</div>
+      </div>
+      <div class="type-row">
+        <div class="type-meta"><strong>Body</strong>DM Mono<br>400 / 14px</div>
+        <div style="color:var(--text-muted);line-height:1.7;max-width:380px">Основной текст интерфейса. Моноширинный шрифт создаёт технический, точный характер без лишней декоративности.</div>
+      </div>
+      <div class="type-row">
+        <div class="type-meta"><strong>Label</strong>DM Mono<br>500 / 11px caps</div>
+        <div style="font-size:11px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--text-hint)">Метка раздела</div>
+      </div>
+      <div class="type-row">
+        <div class="type-meta"><strong>Code</strong>DM Mono<br>400 / 12px</div>
+        <div style="font-size:12px;color:var(--text-muted)">fn <span style="color:var(--accent)">build</span>() → <span style="color:#6A9EC4">Result</span>&lt;(), <span style="color:#C46060">Error</span>&gt;</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- КНОПКИ -->
+  <div class="section">
+    <div class="section-label">03</div>
+    <h2 class="section-title">Кнопки</h2>
+
+    <div class="comp-title" style="margin-bottom:10px">Варианты</div>
+    <div class="btn-grid">
+      <button class="btn btn-primary">Запустить</button>
+      <button class="btn btn-secondary">Настройки</button>
+      <button class="btn btn-ghost">Отмена</button>
+      <button class="btn btn-accent-ghost">Экспорт</button>
+      <button class="btn btn-danger">Удалить</button>
+    </div>
+
+    <div class="comp-title" style="margin-top:1.2rem;margin-bottom:10px">Размеры</div>
+    <div class="btn-grid">
+      <button class="btn btn-primary btn-sm">Малый</button>
+      <button class="btn btn-primary">Средний</button>
+      <button class="btn btn-primary btn-lg">Большой</button>
+    </div>
+
+    <div class="comp-title" style="margin-top:1.2rem;margin-bottom:10px">Иконки</div>
+    <div class="btn-grid">
+      <button class="btn btn-secondary">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="5.5"/><path d="M7 4.5v3l2 1.5"/></svg>
+        История
+      </button>
+      <button class="btn btn-primary">
+        Собрать
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 7h10M8 3l4 4-4 4"/></svg>
+      </button>
+      <div class="btn-icon" title="Настройки">
+        <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="7.5" cy="7.5" r="2"/><path d="M7.5 1v1.5M7.5 12.5V14M14 7.5h-1.5M2.5 7.5H1M11.7 3.3l-1 1M4.3 10.7l-1 1M11.7 11.7l-1-1M4.3 4.3l-1-1"/></svg>
+      </div>
+      <div class="btn-icon" title="Поиск">
+        <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="6.5" cy="6.5" r="4"/><path d="M11 11l2.5 2.5"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ПОЛЯ -->
+  <div class="section">
+    <div class="section-label">04</div>
+    <h2 class="section-title">Поля ввода</h2>
+    <div class="input-grid">
+      <div class="field">
+        <label class="field-label">Имя хоста</label>
+        <input class="input" type="text" placeholder="localhost">
+      </div>
+      <div class="field">
+        <label class="field-label">Порт</label>
+        <input class="input" type="text" placeholder="8080" value="8080">
+      </div>
+      <div class="field">
+        <label class="field-label">Токен API</label>
+        <input class="input" type="password" placeholder="••••••••••••">
+        <span class="field-hint">Хранится в keychain</span>
+      </div>
+      <div class="field">
+        <label class="field-label">Версия</label>
+        <input class="input input-error" type="text" value="v2.x">
+        <span class="field-hint error">Некорректный формат версии</span>
+      </div>
+      <div class="field">
+        <label class="field-label">Протокол</label>
+        <div class="custom-select" id="protoSelect">
+          <div class="custom-select-trigger" onclick="toggleSelect('protoSelect')">
+            <span id="protoValue">TCP</span>
+            <span class="custom-select-arrow">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 5l4 4 4-4"/>
+              </svg>
+            </span>
+          </div>
+          <div class="custom-select-dropdown">
+            <div class="custom-select-option selected" onclick="selectOption('protoSelect', this, 'TCP')">TCP</div>
+            <div class="custom-select-option" onclick="selectOption('protoSelect', this, 'UDP')">UDP</div>
+            <div class="custom-select-option" onclick="selectOption('protoSelect', this, 'WebSocket')">WebSocket</div>
+            <div class="custom-select-option" onclick="selectOption('protoSelect', this, 'gRPC')">gRPC</div>
+          </div>
+        </div>
+      </div>
+      <div class="field" style="grid-column:1/-1">
+        <label class="field-label">Описание</label>
+        <textarea class="input" placeholder="Краткое описание конфигурации..."></textarea>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ТОГЛ / ЧЕКБОКС / РАДИО -->
+  <div class="section">
+    <div class="section-label">05</div>
+    <h2 class="section-title">Контролы</h2>
+    <div class="grid-2">
+
+      <div>
+        <div class="comp-title" style="margin-bottom:12px">Переключатели</div>
+        <div class="toggle-group">
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <span class="toggle-name">Автосборка</span>
+              <span class="toggle-desc">Запускать при изменениях</span>
+            </div>
+            <div class="toggle on" onclick="this.classList.toggle('on')"></div>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <span class="toggle-name">Verbose-лог</span>
+              <span class="toggle-desc">Подробный вывод</span>
+            </div>
+            <div class="toggle" onclick="this.classList.toggle('on')"></div>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <span class="toggle-name">Hot reload</span>
+              <span class="toggle-desc">Только для dev-режима</span>
+            </div>
+            <div class="toggle on" onclick="this.classList.toggle('on')"></div>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <span class="toggle-name">Телеметрия</span>
+              <span class="toggle-desc">Анонимная статистика</span>
+            </div>
+            <div class="toggle" onclick="this.classList.toggle('on')"></div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="comp-title" style="margin-bottom:12px">Флажки</div>
+        <div class="check-group" style="margin-bottom:1.5rem">
+          <div class="check-item" onclick="toggleCheck(this)">
+            <div class="check-box checked"></div>
+            <span class="check-label">Release build</span>
+          </div>
+          <div class="check-item" onclick="toggleCheck(this)">
+            <div class="check-box indeterminate"></div>
+            <span class="check-label">Debug symbols</span>
+          </div>
+          <div class="check-item" onclick="toggleCheck(this)">
+            <div class="check-box"></div>
+            <span class="check-label muted">Strip binaries (недоступно)</span>
+          </div>
+          <div class="check-item" onclick="toggleCheck(this)">
+            <div class="check-box checked"></div>
+            <span class="check-label">Оптимизировать</span>
+          </div>
+        </div>
+
+        <div class="comp-title" style="margin-bottom:12px">Радио</div>
+        <div class="radio-group" id="radioGroup">
+          <div class="check-item" onclick="selectRadio(this)">
+            <div class="radio-circle checked"></div>
+            <span class="check-label">x86_64</span>
+          </div>
+          <div class="check-item" onclick="selectRadio(this)">
+            <div class="radio-circle"></div>
+            <span class="check-label">ARM64</span>
+          </div>
+          <div class="check-item" onclick="selectRadio(this)">
+            <div class="radio-circle"></div>
+            <span class="check-label">WASM</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- СЛАЙДЕРЫ -->
+  <div class="section">
+    <div class="section-label">06</div>
+    <h2 class="section-title">Слайдеры</h2>
+    <div class="slider-group">
+      <div class="slider-row">
+        <div class="slider-header">
+          <span class="slider-name">Потоки CPU</span>
+          <span class="slider-val" id="v1">4</span>
+        </div>
+        <div class="cslider" data-min="1" data-max="16" data-value="4" data-step="1" data-out="v1"></div>
+      </div>
+      <div class="slider-row">
+        <div class="slider-header">
+          <span class="slider-name">Лимит памяти (MB)</span>
+          <span class="slider-val" id="v2">512</span>
+        </div>
+        <div class="cslider" data-min="128" data-max="4096" data-value="512" data-step="128" data-out="v2"></div>
+      </div>
+      <div class="slider-row">
+        <div class="slider-header">
+          <span class="slider-name">Уровень сжатия</span>
+          <span class="slider-val" id="v3">6</span>
+        </div>
+        <div class="cslider" data-min="0" data-max="9" data-value="6" data-step="1" data-out="v3"></div>
+      </div>
+      <div class="slider-row">
+        <div class="slider-header">
+          <span class="slider-name">Timeout (ms)</span>
+          <span class="slider-val" id="v4">3000</span>
+        </div>
+        <div class="cslider" data-min="100" data-max="10000" data-value="3000" data-step="100" data-out="v4"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- БЕЙДЖИ -->
+  <div class="section">
+    <div class="section-label">07</div>
+    <h2 class="section-title">Бейджи и теги</h2>
+    <div class="badge-grid">
+      <span class="badge badge-accent badge-dot">Active</span>
+      <span class="badge badge-success badge-dot">Online</span>
+      <span class="badge badge-warning badge-dot">Building</span>
+      <span class="badge badge-danger badge-dot">Failed</span>
+      <span class="badge badge-info">v2.4.1</span>
+      <span class="badge badge-muted">Archived</span>
+    </div>
+    <div class="badge-grid" style="margin-top:10px">
+      <span class="tag">Rust</span>
+      <span class="tag">Kotlin</span>
+      <span class="tag">C#</span>
+      <span class="tag">backend</span>
+      <span class="tag">plugin</span>
+      <span class="tag">desktop</span>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ПРОГРЕСС -->
+  <div class="section">
+    <div class="section-label">08</div>
+    <h2 class="section-title">Прогресс</h2>
+    <div class="progress-group">
+      <div class="progress-row">
+        <div class="progress-header">
+          <span class="progress-label">Сборка</span>
+          <span class="progress-pct">72%</span>
+        </div>
+        <div class="progress-track"><div class="progress-fill" style="width:72%"></div></div>
+      </div>
+      <div class="progress-row">
+        <div class="progress-header">
+          <span class="progress-label">Тесты</span>
+          <span class="progress-pct" style="color:#5A9E6A">100%</span>
+        </div>
+        <div class="progress-track"><div class="progress-fill success" style="width:100%"></div></div>
+      </div>
+      <div class="progress-row">
+        <div class="progress-header">
+          <span class="progress-label">Загрузка артефактов</span>
+          <span class="progress-pct" style="color:var(--text-hint)">38%</span>
+        </div>
+        <div class="progress-track"><div class="progress-fill muted" style="width:38%"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- КАРТОЧКИ -->
+  <div class="section">
+    <div class="section-label">09</div>
+    <h2 class="section-title">Карточки</h2>
+    <div class="card-grid">
+      <div class="card card-accent">
+        <div class="card-title">mc-auth-plugin</div>
+        <p class="card-body">Плагин авторизации для Minecraft-сервера. Kotlin + Paper API.</p>
+        <div class="card-footer">
+          <span class="badge badge-success badge-dot">Активен</span>
+          <span class="card-meta">v1.3.2</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">daemon-core</div>
+        <p class="card-body">Системный демон на Rust. IPC через Unix-сокеты.</p>
+        <div class="card-footer">
+          <span class="badge badge-warning badge-dot">Dev</span>
+          <span class="card-meta">v0.8.0</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">panel-ui</div>
+        <p class="card-body">Административная панель. C# + WPF, тёмная тема системная.</p>
+        <div class="card-footer">
+          <span class="badge badge-muted">Архив</span>
+          <span class="card-meta">v2.1.0</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">api-gateway</div>
+        <p class="card-body">REST-прокси с кэшированием. Java Spring Boot, PostgreSQL.</p>
+        <div class="card-footer">
+          <span class="badge badge-danger badge-dot">Ошибка</span>
+          <span class="card-meta">v3.0.1</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ТАБЛИЦА -->
+  <div class="section">
+    <div class="section-label">10</div>
+    <h2 class="section-title">Таблица</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Имя</th>
+            <th>Язык</th>
+            <th>Статус</th>
+            <th>Последний билд</th>
+            <th>Версия</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="text-primary">mc-auth-plugin</td>
+            <td>Kotlin</td>
+            <td><span class="badge badge-success badge-dot">Online</span></td>
+            <td>2 мин назад</td>
+            <td class="text-accent">v1.3.2</td>
+          </tr>
+          <tr>
+            <td class="text-primary">daemon-core</td>
+            <td>Rust</td>
+            <td><span class="badge badge-warning badge-dot">Building</span></td>
+            <td>сейчас</td>
+            <td class="text-accent">v0.8.0</td>
+          </tr>
+          <tr>
+            <td class="text-primary">panel-ui</td>
+            <td>C#</td>
+            <td><span class="badge badge-muted">Archived</span></td>
+            <td>3 нед назад</td>
+            <td class="text-accent">v2.1.0</td>
+          </tr>
+          <tr>
+            <td class="text-primary">api-gateway</td>
+            <td>Java</td>
+            <td><span class="badge badge-danger badge-dot">Failed</span></td>
+            <td>1 ч назад</td>
+            <td class="text-accent">v3.0.1</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- УВЕДОМЛЕНИЯ -->
+  <div class="section">
+    <div class="section-label">11</div>
+    <h2 class="section-title">Уведомления</h2>
+    <div class="alert-group">
+      <div class="alert alert-success">
+        <span class="alert-icon">✓</span>
+        <div class="alert-text">
+          <div class="alert-title">Сборка завершена</div>
+          <div class="alert-sub">mc-auth-plugin v1.3.2 · 4.2s</div>
+        </div>
+      </div>
+      <div class="alert alert-warning">
+        <span class="alert-icon">⚠</span>
+        <div class="alert-text">
+          <div class="alert-title">Устаревшая зависимость</div>
+          <div class="alert-sub">paper-api 1.20.1 → доступна 1.21.4</div>
+        </div>
+      </div>
+      <div class="alert alert-danger">
+        <span class="alert-icon">✕</span>
+        <div class="alert-text">
+          <div class="alert-title">Ошибка сборки</div>
+          <div class="alert-sub">api-gateway: connection refused на порту 5432</div>
+        </div>
+      </div>
+      <div class="alert alert-info">
+        <span class="alert-icon">i</span>
+        <div class="alert-text">
+          <div class="alert-title">Информация</div>
+          <div class="alert-sub">Следующее обслуживание — в воскресенье 03:00 UTC</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- КОД -->
+  <div class="section">
+    <div class="section-label">12</div>
+    <h2 class="section-title">Блок кода</h2>
+    <div class="code-block"><span class="cm">// daemon-core / src/main.rs</span>
+<span class="kw">use</span> std::os::unix::net::UnixListener;
+
+<span class="kw">fn</span> <span class="fn">main</span>() → <span class="fn">Result</span>&lt;(), Box&lt;<span class="kw">dyn</span> std::error::Error&gt;&gt; {
+    <span class="kw">let</span> listener = UnixListener::<span class="fn">bind</span>(<span class="str">"/run/daemon.sock"</span>)?;
+    println!(<span class="str">"Listening on socket"</span>);
+
+    <span class="kw">for</span> stream <span class="kw">in</span> listener.<span class="fn">incoming</span>() {
+        <span class="fn">handle_client</span>(stream?);
+    }
+    Ok(())
+}</div>
+  </div>
+
+</div>
+
+<script>
+const root = document.documentElement;
+
+/* ── Тема ── */
+document.getElementById('themeToggle').addEventListener('click', () => {
+  root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+  updateAllSliders();
+});
+
+/* ── Акцент ── */
+document.querySelectorAll('.accent-dot').forEach(dot => {
+  dot.addEventListener('click', () => {
+    document.querySelectorAll('.accent-dot').forEach(d => d.classList.remove('on'));
+    dot.classList.add('on');
+    root.dataset.accent = dot.dataset.accent;
+    const map = { amber:'#FBF3E4', rust:'#FAF0EB', pine:'#EBF5EE', steel:'#E8F2FB', lavender:'#F2EEFB' };
+    if (root.dataset.theme === 'light') root.style.setProperty('--accent-bg', map[dot.dataset.accent]);
+    updateAllSliders();
+  });
+});
+
+/* ── Кастомные слайдеры ── */
+function buildSliders() {
+  document.querySelectorAll('.cslider').forEach(el => {
+    const min   = parseFloat(el.dataset.min);
+    const max   = parseFloat(el.dataset.max);
+    const step  = parseFloat(el.dataset.step) || 1;
+    let   value = parseFloat(el.dataset.value);
+    const outId = el.dataset.out;
+
+    const track = document.createElement('div');
+    track.className = 'cslider-track';
+    const fill  = document.createElement('div');
+    fill.className = 'cslider-fill';
+    const thumb = document.createElement('div');
+    thumb.className = 'cslider-thumb';
+
+    track.appendChild(fill);
+    el.appendChild(track);
+    el.appendChild(thumb);
+
+    function pct(v) { return (v - min) / (max - min); }
+
+    function snapToStep(raw) {
+      const snapped = Math.round((raw - min) / step) * step + min;
+      return Math.min(max, Math.max(min, snapped));
+    }
+
+    function setDisplay(v) {
+      /* Трек и thumb двигаются по непрерывной позиции — без рывков */
+      const p = pct(v) * 100;
+      fill.style.width  = p + '%';
+      thumb.style.left  = p + '%';
+    }
+
+    function setValueFromPct(rawPct) {
+      /* rawPct — непрерывное 0..1 от позиции курсора */
+      const continuous = min + rawPct * (max - min);
+      value = snapToStep(continuous);           /* snap только для вывода */
+      setDisplay(min + rawPct * (max - min));   /* трек — непрерывный */
+      if (outId) document.getElementById(outId).textContent = value;
+    }
+
+    /* Инициализация */
+    setDisplay(value);
+    if (outId) document.getElementById(outId).textContent = value;
+
+    /* Drag */
+    function getRect() { return track.getBoundingClientRect(); }
+    function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+
+    function onMove(clientX) {
+      const r = getRect();
+      setValueFromPct(clamp01((clientX - r.left) / r.width));
+    }
+
+    el.addEventListener('mousedown', e => {
+      e.preventDefault();
+      el.classList.add('dragging');
+      onMove(e.clientX);
+      const onUp   = () => { el.classList.remove('dragging'); window.removeEventListener('mousemove', onMv); window.removeEventListener('mouseup', onUp); };
+      const onMv   = e => onMove(e.clientX);
+      window.addEventListener('mousemove', onMv);
+      window.addEventListener('mouseup',   onUp);
+    });
+
+    el.addEventListener('touchstart', e => {
+      e.preventDefault();
+      el.classList.add('dragging');
+      onMove(e.touches[0].clientX);
+      const onUp = () => { el.classList.remove('dragging'); window.removeEventListener('touchmove', onMv); window.removeEventListener('touchend', onUp); };
+      const onMv = e => onMove(e.touches[0].clientX);
+      window.addEventListener('touchmove', onMv, { passive: false });
+      window.addEventListener('touchend',  onUp);
+    }, { passive: false });
+
+    /* Сохраняем ссылку для updateAllSliders */
+    el._sliderSetDisplay = () => setDisplay(value);
+  });
+}
+
+function updateAllSliders() {
+  /* При смене акцента/темы цвета обновляются через CSS-переменные автоматически */
+}
+
+buildSliders();
+
+/* ── Чекбоксы ── */
+function toggleCheck(item) {
+  const box = item.querySelector('.check-box');
+  if (box.classList.contains('indeterminate')) {
+    box.classList.remove('indeterminate');
+    box.classList.add('checked');
+  } else if (box.classList.contains('checked')) {
+    box.classList.remove('checked');
+  } else {
+    box.classList.add('checked');
+  }
+}
+
+/* ── Радио с анимацией ── */
+function selectRadio(item) {
+  const group = item.closest('.radio-group');
+  group.querySelectorAll('.radio-circle').forEach(r => {
+    if (r.classList.contains('checked')) {
+      r.classList.add('unchecking');
+      r.classList.remove('checked');
+      setTimeout(() => r.classList.remove('unchecking'), 160);
+    }
+  });
+  const target = item.querySelector('.radio-circle');
+  setTimeout(() => target.classList.add('checked'), 40);
+}
+
+/* ── Кастомный дропдаун ── */
+function toggleSelect(id) {
+  const el = document.getElementById(id);
+  const isOpen = el.classList.contains('open');
+  closeAllSelects();
+  if (!isOpen) el.classList.add('open');
+}
+
+function selectOption(id, optionEl, value) {
+  const el = document.getElementById(id);
+  el.querySelectorAll('.custom-select-option').forEach(o => o.classList.remove('selected'));
+  optionEl.classList.add('selected');
+  document.getElementById('protoValue').textContent = value;
+  el.classList.remove('open');
+}
+
+function closeAllSelects() {
+  document.querySelectorAll('.custom-select.open').forEach(el => el.classList.remove('open'));
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.custom-select')) closeAllSelects();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeAllSelects();
+});
+</script>
+</body>
+</html>
