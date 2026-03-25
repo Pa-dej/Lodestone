@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { t } from "$lib/stores/i18n.svelte";
+
   interface Props {
     onClick: () => void;
   }
@@ -8,7 +10,7 @@
 
 <button type="button" class="add-card" onclick={onClick}>
   <span class="add-icon">+</span>
-  <span class="add-label">Добавить сервер</span>
+  <span class="add-label">{t("add_server")}</span>
 </button>
 
 <style>

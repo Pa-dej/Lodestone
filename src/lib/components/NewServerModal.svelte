@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import Toggle from "$lib/components/Toggle.svelte";
+  import CustomSelect from "$lib/components/CustomSelect.svelte";
   import { createServer, fetchVersions, serverState } from "$lib/stores/servers.svelte";
+  import { i18nState, t } from "$lib/stores/i18n.svelte";
   import type { CoreType, NewServerConfig, ServerConfig } from "$lib/types";
   import PaperIcon from "../../icons/servers/Paper.svg?raw";
   import PurpurIcon from "../../icons/servers/Purpur.svg?raw";
@@ -26,50 +27,54 @@
 
   let { open, onClose, onCreated = () => {} }: Props = $props();
 
-  const coreOptions: CoreOption[] = [
+  const coreOptions = $derived<CoreOption[]>([
     {
       id: "paper",
       iconSvg: PaperIcon,
       color: "var(--core-paper)",
       name: "Paper",
-      description: "Высокая производительность, плагины",
+      description:
+        i18nState.language === "ru"
+          ? "Высокая производительность, плагины"
+          : "High performance, plugins",
     },
     {
       id: "purpur",
       iconSvg: PurpurIcon,
       color: "var(--core-purpur)",
       name: "Purpur",
-      description: "Форк Paper, больше настроек",
+      description:
+        i18nState.language === "ru" ? "Форк Paper, больше настроек" : "Paper fork with extra settings",
     },
     {
       id: "fabric",
       iconSvg: FabricIcon,
       color: "var(--core-fabric)",
       name: "Fabric",
-      description: "Лёгкий загрузчик модов",
+      description: i18nState.language === "ru" ? "Лёгкий загрузчик модов" : "Lightweight mod loader",
     },
     {
       id: "forge",
       iconSvg: ForgeIcon,
       color: "var(--core-forge)",
       name: "Forge",
-      description: "Классический загрузчик модов",
+      description: i18nState.language === "ru" ? "Классический загрузчик модов" : "Classic mod loader",
     },
     {
       id: "folia",
       iconSvg: FoliaIcon,
       color: "var(--core-folia)",
       name: "Folia",
-      description: "Многопоточный форк Paper",
+      description: i18nState.language === "ru" ? "Многопоточный форк Paper" : "Multithreaded Paper fork",
     },
     {
       id: "vanilla",
       iconSvg: VanillaIcon,
       color: "var(--core-vanilla)",
       name: "Vanilla",
-      description: "Официальный сервер Mojang",
+      description: i18nState.language === "ru" ? "Официальный сервер Mojang" : "Official Mojang server",
     },
-  ];
+  ]);
 
   let currentStep = $state(0);
   let selectedCore = $state<CoreType>("paper");
@@ -90,6 +95,30 @@
   let failed = $state(false);
   let creationStarted = $state(false);
   let previousOpen = false;
+
+  const versionOptions = $derived.by(() => {
+    if (loadingVersions) {
+      return [{ value: "", label: t("modal_loading_versions"), disabled: true }];
+    }
+    if (versions.length === 0) {
+      return [{ value: "", label: t("modal_no_versions"), disabled: true }];
+    }
+    return versions.map((version) => ({ value: version, label: version }));
+  });
+
+  const gamemodeOptions = $derived([
+    { value: "survival", label: i18nState.language === "ru" ? "Выживание" : "Survival" },
+    { value: "creative", label: i18nState.language === "ru" ? "Креатив" : "Creative" },
+    { value: "adventure", label: i18nState.language === "ru" ? "Приключение" : "Adventure" },
+    { value: "spectator", label: i18nState.language === "ru" ? "Наблюдатель" : "Spectator" },
+  ]);
+
+  const difficultyOptions = $derived([
+    { value: "peaceful", label: i18nState.language === "ru" ? "Мирная" : "Peaceful" },
+    { value: "easy", label: i18nState.language === "ru" ? "Лёгкая" : "Easy" },
+    { value: "normal", label: i18nState.language === "ru" ? "Нормальная" : "Normal" },
+    { value: "hard", label: i18nState.language === "ru" ? "Сложная" : "Hard" },
+  ]);
 
   const progressPercent = $derived.by(() => {
     if (finished) {
@@ -123,7 +152,7 @@
       versions = result;
       selectedVersion = result[0] ?? "";
       if (!selectedVersion) {
-        modalError = "Не удалось получить список версий";
+        modalError = t("modal_no_versions");
       }
     } finally {
       loadingVersions = false;
@@ -171,7 +200,7 @@
 
   async function submitCreation(): Promise<void> {
     if (!selectedVersion) {
-      modalError = "Выберите версию сервера";
+      modalError = t("modal_select_version_error");
       return;
     }
 
@@ -199,18 +228,12 @@
     const created = await createServer(payload);
     if (!created) {
       failed = true;
-      modalError = serverState.createError ?? "Не удалось создать сервер";
+      modalError = serverState.createError ?? t("modal_create_error");
       return;
     }
 
     finished = true;
     onCreated(created);
-  }
-
-  function handleOverlayClick(event: MouseEvent): void {
-    if (event.target === event.currentTarget) {
-      closeIfAllowed();
-    }
   }
 
   function stepState(index: number): "pending" | "current" | "done" {
@@ -223,18 +246,6 @@
     return "pending";
   }
 
-  onMount(() => {
-    const onEscape = (event: KeyboardEvent): void => {
-      if (event.key === "Escape" && open) {
-        closeIfAllowed();
-      }
-    };
-    window.addEventListener("keydown", onEscape);
-    return () => {
-      window.removeEventListener("keydown", onEscape);
-    };
-  });
-
   $effect(() => {
     if (open && !previousOpen) {
       resetState();
@@ -244,10 +255,10 @@
 </script>
 
 {#if open}
-  <div class="modal-overlay" role="presentation" onclick={handleOverlayClick}>
-    <div class="modal panel" role="dialog" aria-modal="true" aria-label="Новый сервер">
+  <div class="modal-overlay" role="presentation">
+    <div class="modal panel" role="dialog" aria-modal="true" aria-label={t("modal_new_server")}>
       <header class="modal-header">
-        <h2 class="panel-title">Новый сервер</h2>
+        <h2 class="panel-title">{t("modal_new_server")}</h2>
         <button type="button" class="btn-icon" onclick={closeIfAllowed}>✕</button>
       </header>
 
@@ -277,85 +288,87 @@
         </div>
 
         <footer class="modal-footer">
-          <button type="button" class="btn btn-primary" onclick={moveToConfig}>Далее</button>
+          <button type="button" class="btn btn-primary" onclick={moveToConfig}>{t("modal_next")}</button>
         </footer>
       {/if}
 
       {#if currentStep === 1}
         <div class="form-grid">
           <label class="field">
-            <span class="field-label">Server name</span>
+            <span class="field-label">{t("field_server_name")}</span>
             <input class="input" bind:value={serverName} placeholder="my-server" />
           </label>
 
-          <label class="field">
-            <span class="field-label">Version</span>
-            <select class="input" bind:value={selectedVersion} disabled={loadingVersions}>
-              {#if loadingVersions}
-                <option>Loading...</option>
-              {:else if versions.length === 0}
-                <option value="">No versions</option>
-              {:else}
-                {#each versions as version}
-                  <option value={version}>{version}</option>
-                {/each}
-              {/if}
-            </select>
-          </label>
+          <div class="field">
+            <span class="field-label">{t("field_version")}</span>
+            <CustomSelect
+              value={selectedVersion}
+              options={versionOptions}
+              disabled={loadingVersions || versions.length === 0}
+              onChange={(value) => {
+                selectedVersion = value;
+              }}
+            />
+          </div>
 
           <label class="field">
-            <span class="field-label">Port</span>
+            <span class="field-label">{t("field_port")}</span>
             <input class="input" type="number" min={1} max={65535} bind:value={port} />
           </label>
 
-          <label class="field">
-            <span class="field-label">RAM (MB)</span>
-            <input class="input" type="number" min={512} step={256} bind:value={ramMb} />
-          </label>
+          <div class="field">
+            <span class="field-label">{t("field_ram_mb")}</span>
+            <div class="slider-row">
+              <input class="range-input" type="range" min={512} max={16384} step={256} bind:value={ramMb} />
+              <span class="tag">{ramMb} MB</span>
+            </div>
+          </div>
 
           <label class="field span-2">
-            <span class="field-label">MOTD</span>
+            <span class="field-label">{t("field_motd")}</span>
             <input class="input" bind:value={motd} placeholder="A Lodestone Minecraft Server" />
           </label>
 
-          <label class="field">
-            <span class="field-label">Gamemode</span>
-            <select class="input" bind:value={gamemode}>
-              <option value="survival">Survival</option>
-              <option value="creative">Creative</option>
-              <option value="adventure">Adventure</option>
-              <option value="spectator">Spectator</option>
-            </select>
-          </label>
+          <div class="field">
+            <span class="field-label">{t("field_gamemode")}</span>
+            <CustomSelect
+              value={gamemode}
+              options={gamemodeOptions}
+              onChange={(value) => {
+                gamemode = value as typeof gamemode;
+              }}
+            />
+          </div>
 
-          <label class="field">
-            <span class="field-label">Difficulty</span>
-            <select class="input" bind:value={difficulty}>
-              <option value="peaceful">Peaceful</option>
-              <option value="easy">Easy</option>
-              <option value="normal">Normal</option>
-              <option value="hard">Hard</option>
-            </select>
-          </label>
+          <div class="field">
+            <span class="field-label">{t("field_difficulty")}</span>
+            <CustomSelect
+              value={difficulty}
+              options={difficultyOptions}
+              onChange={(value) => {
+                difficulty = value as typeof difficulty;
+              }}
+            />
+          </div>
 
           <div class="field span-2">
-            <span class="field-label">View Distance</span>
+            <span class="field-label">{t("field_view_distance")}</span>
             <div class="slider-row">
               <input class="range-input" type="range" min={3} max={32} step={1} bind:value={viewDistance} />
-              <span class="tag">{viewDistance} chunks</span>
+              <span class="tag">{viewDistance} {t("unit_chunks")}</span>
             </div>
           </div>
 
           <div class="field span-2 toggles-inline">
             <Toggle
-              label="Online mode"
-              description="Проверка лицензии Mojang"
+              label={t("field_online_mode")}
+              description={t("field_online_mode_desc")}
               checked={onlineMode}
               onToggle={(value) => (onlineMode = value)}
             />
             <Toggle
-              label="PVP"
-              description="Разрешить урон между игроками"
+              label={t("field_pvp")}
+              description={t("field_pvp_desc")}
               checked={pvpEnabled}
               onToggle={(value) => (pvpEnabled = value)}
             />
@@ -366,16 +379,16 @@
           <div class="alert alert-danger">
             <span class="alert-icon">✕</span>
             <div class="alert-text">
-              <div class="alert-title">Ошибка</div>
+              <div class="alert-title">{t("error_title")}</div>
               <div class="alert-sub">{modalError}</div>
             </div>
           </div>
         {/if}
 
         <footer class="modal-footer">
-          <button type="button" class="btn btn-ghost" onclick={moveBack}>Назад</button>
+          <button type="button" class="btn btn-ghost" onclick={moveBack}>{t("modal_back")}</button>
           <button type="button" class="btn btn-primary" onclick={submitCreation}>
-            Создать
+            {t("modal_create")}
           </button>
         </footer>
       {/if}
@@ -394,13 +407,13 @@
 
           <div class="download-text">
             {#if finished}
-              <h3>Готово!</h3>
-              <p>Сервер создан успешно</p>
+              <h3>{t("modal_done_title")}</h3>
+              <p>{t("modal_done_subtitle")}</p>
             {:else if failed}
-              <h3>Ошибка</h3>
+              <h3>{t("modal_failed_title")}</h3>
               <p>{modalError}</p>
             {:else}
-              <h3>Загрузка</h3>
+              <h3>{t("modal_download_title")}</h3>
               <p>{downloadFilename} · {downloadSize}</p>
             {/if}
           </div>
@@ -417,10 +430,8 @@
         </div>
 
         <footer class="modal-footer">
-          {#if finished || failed}
-            <button type="button" class="btn btn-primary" onclick={closeIfAllowed}>Закрыть</button>
-          {:else if creationStarted}
-            <button type="button" class="btn btn-ghost" disabled>Подождите...</button>
+          {#if creationStarted && !finished && !failed}
+            <button type="button" class="btn btn-ghost" disabled>{t("modal_wait")}</button>
           {/if}
         </footer>
       {/if}

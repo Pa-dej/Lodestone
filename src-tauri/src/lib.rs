@@ -3,12 +3,15 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    cmp::Ordering,
     collections::{HashMap, HashSet},
     env,
     ffi::OsStr,
     fs,
+    io::ErrorKind,
+    net::TcpListener,
     path::{Path, PathBuf},
-    process::Stdio,
+    process::{Command as StdCommand, Stdio},
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -59,6 +62,12 @@ pub struct ServerPropertiesConfig {
     online_mode: bool,
     pvp: bool,
     view_distance: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerPropertyEntry {
+    key: String,
+    value: String,
 }
 
 impl Default for ServerPropertiesConfig {
@@ -144,6 +153,23 @@ fn home_dir() -> Result<PathBuf, String> {
 }
 
 fn app_data_dir() -> Result<PathBuf, String> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(path) = env::var_os("APPDATA") {
+            return Ok(PathBuf::from(path).join("Lodestone"));
+        }
+        if let Some(path) = env::var_os("LOCALAPPDATA") {
+            return Ok(PathBuf::from(path).join("Lodestone"));
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(path) = env::var_os("XDG_DATA_HOME") {
+            return Ok(PathBuf::from(path).join("lodestone"));
+        }
+    }
+
     Ok(home_dir()?.join(".lodestone"))
 }
 
@@ -161,6 +187,12 @@ fn settings_file_path() -> Result<PathBuf, String> {
 
 async fn ensure_app_dirs() -> Result<(), String> {
     let app_dir = app_data_dir()?;
+    let legacy_dir = home_dir()?.join(".lodestone");
+
+    if app_dir != legacy_dir && !app_dir.exists() && legacy_dir.exists() {
+        let _ = tokio_fs::rename(&legacy_dir, &app_dir).await;
+    }
+
     let servers_dir = servers_root_dir()?;
     tokio_fs::create_dir_all(&app_dir)
         .await
@@ -314,6 +346,216 @@ fn parse_filename_from_url(url: &str) -> String {
         String::from("server.jar")
     } else {
         String::from(file_name)
+    }
+}
+
+fn split_natural_chunks(value: &str) -> Vec<String> {
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_is_digit: Option<bool> = None;
+
+    for ch in value.trim().chars() {
+        if !ch.is_ascii_alphanumeric() {
+            if !current.is_empty() {
+                chunks.push(current);
+                current = String::new();
+                current_is_digit = None;
+            }
+            continue;
+        }
+
+        let is_digit = ch.is_ascii_digit();
+        if let Some(last_kind) = current_is_digit {
+            if last_kind != is_digit {
+                chunks.push(current);
+                current = String::new();
+            }
+        }
+
+        current.push(ch.to_ascii_lowercase());
+        current_is_digit = Some(is_digit);
+    }
+
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks
+}
+
+fn compare_numeric_chunks(left: &str, right: &str) -> Ordering {
+    let left_normalized = left.trim_start_matches('0');
+    let right_normalized = right.trim_start_matches('0');
+    let left_value = if left_normalized.is_empty() {
+        "0"
+    } else {
+        left_normalized
+    };
+    let right_value = if right_normalized.is_empty() {
+        "0"
+    } else {
+        right_normalized
+    };
+
+    left_value
+        .len()
+        .cmp(&right_value.len())
+        .then_with(|| left_value.cmp(right_value))
+}
+
+fn is_prerelease_chunk(chunk: &str) -> bool {
+    let value = chunk.to_ascii_lowercase();
+    value.starts_with("pre")
+        || value.starts_with("rc")
+        || value.starts_with("snapshot")
+        || value.starts_with("beta")
+        || value.starts_with("alpha")
+}
+
+fn compare_minecraft_versions(left: &str, right: &str) -> Ordering {
+    let left_chunks = split_natural_chunks(left);
+    let right_chunks = split_natural_chunks(right);
+    let max_len = left_chunks.len().max(right_chunks.len());
+
+    for index in 0..max_len {
+        match (left_chunks.get(index), right_chunks.get(index)) {
+            (Some(left_chunk), Some(right_chunk)) => {
+                let left_is_num = left_chunk.chars().all(|ch| ch.is_ascii_digit());
+                let right_is_num = right_chunk.chars().all(|ch| ch.is_ascii_digit());
+
+                let order = match (left_is_num, right_is_num) {
+                    (true, true) => compare_numeric_chunks(left_chunk, right_chunk),
+                    (false, false) => left_chunk.cmp(right_chunk),
+                    (true, false) => Ordering::Greater,
+                    (false, true) => Ordering::Less,
+                };
+
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            (Some(left_chunk), None) => {
+                return if is_prerelease_chunk(left_chunk) {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                };
+            }
+            (None, Some(right_chunk)) => {
+                return if is_prerelease_chunk(right_chunk) {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                };
+            }
+            (None, None) => break,
+        }
+    }
+
+    left.trim().cmp(right.trim())
+}
+
+fn sort_versions_desc(versions: &mut Vec<String>) {
+    versions.sort_by(|left, right| compare_minecraft_versions(right, left));
+    versions.dedup();
+}
+
+fn extract_port_from_endpoint(endpoint: &str) -> Option<u16> {
+    endpoint
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+}
+
+#[cfg(target_os = "windows")]
+fn find_windows_port_owner_pid(port: u16) -> Option<u32> {
+    let output = StdCommand::new("netstat")
+        .args(["-ano", "-p", "tcp"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let columns: Vec<&str> = line.split_whitespace().collect();
+        if columns.len() < 4 {
+            continue;
+        }
+        if !columns[0].eq_ignore_ascii_case("TCP") {
+            continue;
+        }
+        if extract_port_from_endpoint(columns[1]) != Some(port) {
+            continue;
+        }
+        if let Some(pid_col) = columns.last() {
+            if let Ok(pid) = pid_col.parse::<u32>() {
+                if pid != std::process::id() {
+                    return Some(pid);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn find_windows_process_name(pid: u32) -> Option<String> {
+    let filter = format!("PID eq {pid}");
+    let output = StdCommand::new("tasklist")
+        .args(["/FI", &filter, "/FO", "CSV", "/NH"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('"') {
+            continue;
+        }
+
+        let columns: Vec<&str> = trimmed.trim_matches('"').split("\",\"").collect();
+        if columns.len() < 2 {
+            continue;
+        }
+
+        if columns[1].trim() == pid.to_string() {
+            return Some(columns[0].trim().to_string());
+        }
+    }
+
+    None
+}
+
+fn format_port_conflict_error(port: u16) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(pid) = find_windows_port_owner_pid(port) {
+            if let Some(process_name) = find_windows_process_name(pid) {
+                return format!("Порт {port} уже занят процессом {process_name} (PID {pid}).");
+            }
+
+            return format!("Порт {port} уже занят процессом PID {pid}.");
+        }
+    }
+
+    format!("Порт {port} уже используется.")
+}
+
+fn ensure_server_port_available(port: u16) -> Result<(), String> {
+    match TcpListener::bind(("0.0.0.0", port)) {
+        Ok(listener) => {
+            drop(listener);
+            Ok(())
+        }
+        Err(err) if err.kind() == ErrorKind::AddrInUse => Err(format_port_conflict_error(port)),
+        Err(err) => Err(format!("Failed to check server port {port}: {err}")),
     }
 }
 
@@ -599,6 +841,88 @@ fn sanitized_property_value(value: &str) -> String {
     value.replace(['\r', '\n'], " ").trim().to_string()
 }
 
+fn sanitized_property_key(key: &str) -> String {
+    key.replace(['\r', '\n', '='], "").trim().to_string()
+}
+
+fn parse_server_properties(content: &str) -> Vec<ServerPropertyEntry> {
+    let mut entries = Vec::new();
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+            continue;
+        }
+
+        if let Some((key, value)) = line.split_once('=') {
+            let normalized_key = sanitized_property_key(key);
+            if normalized_key.is_empty() {
+                continue;
+            }
+
+            entries.push(ServerPropertyEntry {
+                key: normalized_key,
+                value: value.trim().to_string(),
+            });
+        }
+    }
+
+    entries
+}
+
+fn stringify_server_properties(entries: &[ServerPropertyEntry]) -> String {
+    let mut body = String::new();
+    for entry in entries {
+        body.push_str(&entry.key);
+        body.push('=');
+        body.push_str(&entry.value);
+        body.push('\n');
+    }
+    body
+}
+
+async fn place_generated_server_jar(
+    generated_jar: &Path,
+    server_jar_path: &Path,
+    core_name: &str,
+) -> Result<(), String> {
+    if generated_jar == server_jar_path {
+        return Ok(());
+    }
+
+    if let (Ok(source_real), Ok(target_real)) = (
+        fs::canonicalize(generated_jar),
+        fs::canonicalize(server_jar_path),
+    ) {
+        if source_real == target_real {
+            return Ok(());
+        }
+    }
+
+    if server_jar_path.exists() {
+        tokio_fs::remove_file(server_jar_path).await.map_err(|err| {
+            format!(
+                "Failed to replace existing server.jar at {}: {err}",
+                server_jar_path.display()
+            )
+        })?;
+    }
+
+    match tokio_fs::rename(generated_jar, server_jar_path).await {
+        Ok(_) => Ok(()),
+        Err(_) => tokio_fs::copy(generated_jar, server_jar_path)
+            .await
+            .map(|_| ())
+            .map_err(|err| {
+                format!(
+                    "Failed to copy generated {core_name} JAR {} to {}: {err}",
+                    generated_jar.display(),
+                    server_jar_path.display()
+                )
+            }),
+    }
+}
+
 async fn write_bootstrap_files(
     server_dir: &Path,
     settings: &AppSettings,
@@ -759,15 +1083,7 @@ async fn install_core_jar(
             .await?;
 
             let generated_jar = choose_generated_server_jar(server_dir, "fabric")?;
-            tokio_fs::copy(&generated_jar, &server_jar_path)
-                .await
-                .map_err(|err| {
-                    format!(
-                        "Failed to copy generated Fabric JAR {} to {}: {err}",
-                        generated_jar.display(),
-                        server_jar_path.display()
-                    )
-                })?;
+            place_generated_server_jar(&generated_jar, &server_jar_path, "Fabric").await?;
         }
         "forge" => {
             let installer_url = forge_installer_url(client, version).await?;
@@ -810,15 +1126,7 @@ async fn install_core_jar(
             .await?;
 
             let generated_jar = choose_generated_server_jar(server_dir, "forge")?;
-            tokio_fs::copy(&generated_jar, &server_jar_path)
-                .await
-                .map_err(|err| {
-                    format!(
-                        "Failed to copy generated Forge JAR {} to {}: {err}",
-                        generated_jar.display(),
-                        server_jar_path.display()
-                    )
-                })?;
+            place_generated_server_jar(&generated_jar, &server_jar_path, "Forge").await?;
         }
         _ => {
             return Err(format!("Unsupported core: {core}"));
@@ -966,7 +1274,7 @@ async fn get_server_stats_internal(
 // Функция для получения количества онлайн игроков
 async fn get_online_players_count(
     server: &RunningServer,
-    server_id: &str,
+    _server_id: &str,
 ) -> Result<u32, String> {
     // НЕ отправляем команду list - парсим только существующие строки консоли
     // Команда list уже отправляется сервером автоматически или пользователем
@@ -1163,6 +1471,15 @@ async fn start_server(
         .find(|item| item.id == id)
         .ok_or_else(|| String::from("Server not found"))?;
 
+    if let Err(port_error) = ensure_server_port_available(server.port) {
+        emit_console_line(
+            &app_handle,
+            &server.id,
+            format!("[SYSTEM/ERROR] {port_error}"),
+        );
+        return Err(port_error);
+    }
+
     let settings = load_settings_from_disk().await.unwrap_or_default();
     let java = java_exec(&settings);
     let ram_limit = settings.max_ram_mb.max(256);
@@ -1275,6 +1592,122 @@ async fn delete_server(state: State<'_, AppState>, id: String) -> Result<(), Str
             .map_err(|err| format!("Failed to remove {}: {err}", server.path.display()))?;
     }
     save_servers_to_disk(&servers).await
+}
+
+#[tauri::command]
+async fn open_server_folder(id: String) -> Result<(), String> {
+    let server = load_servers_from_disk()
+        .await?
+        .into_iter()
+        .find(|item| item.id == id)
+        .ok_or_else(|| String::from("Server not found"))?;
+
+    if !server.path.exists() {
+        return Err(format!("Server folder does not exist: {}", server.path.display()));
+    }
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut cmd = StdCommand::new("explorer");
+        cmd.arg(&server.path);
+        cmd
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut cmd = StdCommand::new("open");
+        cmd.arg(&server.path);
+        cmd
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut cmd = StdCommand::new("xdg-open");
+        cmd.arg(&server.path);
+        cmd
+    };
+
+    command
+        .spawn()
+        .map_err(|err| format!("Failed to open server folder {}: {err}", server.path.display()))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_server_properties(id: String) -> Result<Vec<ServerPropertyEntry>, String> {
+    let server = load_servers_from_disk()
+        .await?
+        .into_iter()
+        .find(|item| item.id == id)
+        .ok_or_else(|| String::from("Server not found"))?;
+
+    let properties_path = server.path.join("server.properties");
+    if !properties_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = tokio_fs::read_to_string(&properties_path).await.map_err(|err| {
+        format!(
+            "Failed to read server properties {}: {err}",
+            properties_path.display()
+        )
+    })?;
+
+    Ok(parse_server_properties(&content))
+}
+
+#[tauri::command]
+async fn save_server_properties(
+    id: String,
+    entries: Vec<ServerPropertyEntry>,
+) -> Result<(), String> {
+    let server = load_servers_from_disk()
+        .await?
+        .into_iter()
+        .find(|item| item.id == id)
+        .ok_or_else(|| String::from("Server not found"))?;
+
+    let mut normalized = Vec::<ServerPropertyEntry>::new();
+    for entry in entries {
+        let key = sanitized_property_key(&entry.key);
+        if key.is_empty() {
+            continue;
+        }
+        let value = sanitized_property_value(&entry.value);
+        if let Some(existing) = normalized
+            .iter_mut()
+            .find(|item| item.key.eq_ignore_ascii_case(&key))
+        {
+            existing.key = key.clone();
+            existing.value = value;
+        } else {
+            normalized.push(ServerPropertyEntry { key, value });
+        }
+    }
+
+    normalized.sort_by(|a, b| a.key.cmp(&b.key));
+
+    let properties_path = server.path.join("server.properties");
+    let body = stringify_server_properties(&normalized);
+    tokio_fs::write(&properties_path, body).await.map_err(|err| {
+        format!(
+            "Failed to write server properties {}: {err}",
+            properties_path.display()
+        )
+    })?;
+
+    if let Some(server_port) = normalized.iter().find(|entry| entry.key == "server-port") {
+        if let Ok(parsed_port) = server_port.value.parse::<u16>() {
+            let mut servers = load_servers_from_disk().await?;
+            if let Some(server_entry) = servers.iter_mut().find(|item| item.id == id) {
+                server_entry.port = parsed_port;
+                save_servers_to_disk(&servers).await?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1430,7 +1863,7 @@ async fn fetch_versions(core: String) -> Result<Vec<String>, String> {
         .map_err(|err| format!("Failed to initialize HTTP client: {err}"))?;
 
     let core = normalize_core(&core);
-    let versions = match core.as_str() {
+    let mut versions = match core.as_str() {
         "paper" | "folia" => {
             let url = format!("https://api.papermc.io/v2/projects/{core}");
             let json = fetch_json(&client, &url).await?;
@@ -1485,18 +1918,16 @@ async fn fetch_versions(core: String) -> Result<Vec<String>, String> {
                 .get("promos")
                 .and_then(Value::as_object)
                 .ok_or_else(|| String::from("Invalid Forge versions response"))?;
-            let mut versions = promos
+            promos
                 .keys()
                 .filter_map(|key| key.split('-').next())
                 .map(String::from)
-                .collect::<Vec<_>>();
-            versions.sort_by(|a, b| b.cmp(a));
-            versions.dedup();
-            versions
+                .collect::<Vec<_>>()
         }
         _ => return Err(format!("Unsupported core: {core}")),
     };
 
+    sort_versions_desc(&mut versions);
     Ok(versions)
 }
 
@@ -1555,6 +1986,9 @@ pub fn run() {
             start_server,
             stop_server,
             delete_server,
+            open_server_folder,
+            get_server_properties,
+            save_server_properties,
             attach_console,
             send_command,
             get_server_commands,

@@ -5,6 +5,7 @@
   import ServerIcon from "../../icons/Server.svg?raw";
   import TerminalIcon from "../../icons/Terminal.svg?raw";
   import SettingsIcon from "../../icons/Settings.svg?raw";
+  import { t } from "$lib/stores/i18n.svelte";
 
   interface NavItem {
     label: string;
@@ -12,11 +13,11 @@
     iconSvg: string;
   }
 
-  const navItems: NavItem[] = [
-    { label: "Servers", path: "/", iconSvg: ServerIcon },
-    { label: "Console", path: "/console", iconSvg: TerminalIcon },
-    { label: "Settings", path: "/settings", iconSvg: SettingsIcon },
-  ];
+  const navItems = $derived<NavItem[]>([
+    { label: t("nav_servers"), path: "/", iconSvg: ServerIcon },
+    { label: t("nav_console"), path: "/console", iconSvg: TerminalIcon },
+    { label: t("nav_settings"), path: "/settings", iconSvg: SettingsIcon },
+  ]);
 
   const currentPath = $derived($page.url.pathname);
 
@@ -30,7 +31,6 @@
     <span class="brand-icon">{@html LodestoneIcon}</span>
     <div class="brand-text">
       <h1 class="brand">Lodestone</h1>
-      <p class="brand-sub">Minecraft Server Launcher</p>
     </div>
   </header>
 
@@ -95,15 +95,6 @@
     letter-spacing: -0.02em;
     font-size: 24px;
     line-height: 0.95;
-  }
-
-  .brand-sub {
-    color: var(--text-hint);
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    margin-top: 2px;
-    white-space: nowrap;
   }
 
   .sidebar-nav {

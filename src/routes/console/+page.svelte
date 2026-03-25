@@ -8,6 +8,7 @@
     openConsoleTab,
     serverState,
   } from "$lib/stores/servers.svelte";
+  import { t } from "$lib/stores/i18n.svelte";
 
   let handledQueryId = $state<string | null>(null);
 
@@ -50,7 +51,7 @@
   <div class="tabs-bar panel">
     <div class="tab-list">
       {#if tabServers.length === 0}
-        <div class="empty-tabs">Нет открытых вкладок.</div>
+        <div class="empty-tabs">{t("console_no_tabs")}</div>
       {:else}
         {#each tabServers as tab (tab.id)}
           <button
@@ -84,7 +85,7 @@
     </div>
 
     <details class="tab-picker">
-      <summary class="btn btn-ghost btn-sm picker-toggle">+ Вкладки</summary>
+      <summary class="btn btn-ghost btn-sm picker-toggle">+ {t("console_tabs_button")}</summary>
       <div class="tab-picker-menu panel">
         {#each serverState.servers as server (server.id)}
           <button
@@ -97,11 +98,11 @@
             }}
           >
             <span class="tab-dot" class:running={server.running}></span>
-            <span class="picker-name">{server.name}</span>
-            {#if serverState.consoleTabs.includes(server.id)}
-              <span class="tag">opened</span>
-            {/if}
-          </button>
+              <span class="picker-name">{server.name}</span>
+              {#if serverState.consoleTabs.includes(server.id)}
+                <span class="tag">{t("console_opened")}</span>
+              {/if}
+            </button>
         {/each}
       </div>
     </details>
@@ -110,7 +111,7 @@
   <div class="console-body">
     {#if serverState.consoleTabs.length === 0}
       <div class="panel quick-open">
-        <h2 class="panel-title">Откройте сервер</h2>
+        <h2 class="panel-title">{t("console_open_server")}</h2>
         <div class="quick-list">
           {#each serverState.servers as server (server.id)}
             <button

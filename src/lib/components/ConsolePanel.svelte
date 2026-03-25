@@ -11,6 +11,7 @@
     serverState,
     setAutoScroll,
   } from "$lib/stores/servers.svelte";
+  import { t } from "$lib/stores/i18n.svelte";
 
   interface Props {
     serverId: string | null;
@@ -318,7 +319,7 @@
 
 {#if !selectedServer}
   <section class="panel empty-panel">
-    <p class="empty-text">Откройте вкладку сервера для просмотра консоли.</p>
+    <p class="empty-text">{t("console_empty_hint")}</p>
   </section>
 {:else}
   <section class="panel console-panel">
@@ -331,17 +332,17 @@
       </div>
       <div class="console-controls">
         <span class="badge badge-dot" class:badge-running={selectedServer.running}>
-          {selectedServer.running ? "Running" : "Stopped"}
+          {selectedServer.running ? t("status_running") : t("status_stopped")}
         </span>
         <button type="button" class="btn btn-ghost btn-sm" onclick={() => clearConsole(selectedServer.id)}>
-          Clear
+          {t("action_clear")}
         </button>
       </div>
     </header>
 
     <div class="terminal" bind:this={scroller} onscroll={handleScroll}>
       {#if lines.length === 0}
-        <div class="terminal-empty">Пока нет вывода консоли.</div>
+        <div class="terminal-empty">{t("console_empty_output")}</div>
       {:else}
         {#each lines as line (line.id)}
           <div class={`terminal-line level-${line.level.toLowerCase()}`}>
@@ -367,14 +368,14 @@
         <input
           class="input command-input"
           bind:value={commandInput}
-          placeholder="Введите команду..."
+          placeholder={t("console_command_placeholder")}
           onkeydown={handleCommandKeydown}
           oninput={handleCommandInput}
         />
         {#if showCompletions && tabCandidates.length > 0}
           <div class="completions-popup">
             <div class="completions-header">
-              Доступные команды ({tabCandidates.length}):
+              {t("console_available_commands")} ({tabCandidates.length}):
             </div>
             <div class="completions-grid">
               {#each tabCandidates as completion, index}
@@ -388,15 +389,13 @@
                 </button>
               {/each}
             </div>
-            <div class="completions-hint">
-              Нажмите Tab еще раз или кликните для выбора • Esc для закрытия
-            </div>
+            <div class="completions-hint">Tab / Esc</div>
           </div>
         {/if}
       </div>
       <button type="submit" class="btn btn-primary">Enter</button>
     </form>
-    <div class="command-hint">Tab: автодополнение • Двойной Tab: показать все варианты • ↑/↓: навигация по подсказкам/истории • Enter: выбрать • Esc: закрыть</div>
+    <div class="command-hint">{t("console_hint")}</div>
   </section>
 {/if}
 

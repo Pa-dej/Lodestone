@@ -44,6 +44,11 @@
   --bg-active: #3d3630;
   --overlay-bg: rgba(26, 23, 19, 0.72);
 
+  --scrollbar-track: #231f1b;
+  --scrollbar-thumb: #514941;
+  --scrollbar-thumb-hover: #665d55;
+  --scrollbar-thumb-active: #7a7068;
+
   --accent-amber: #c8922a;
   --accent-rust: #c4603a;
   --accent-pine: #5a9e6a;
@@ -75,6 +80,10 @@
   --bg-subtle: #e0dcd4;
   --bg-active: #ccc7be;
   --overlay-bg: rgba(26, 23, 19, 0.4);
+  --scrollbar-track: #e8e3db;
+  --scrollbar-thumb: #c8c1b7;
+  --scrollbar-thumb-hover: #b5ad9f;
+  --scrollbar-thumb-active: #a1988a;
 }
 
 [data-accent="amber"] {
@@ -150,6 +159,39 @@ body {
   line-height: 1.6;
   transition: background var(--tr), color var(--tr);
   overflow: hidden;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border: 2px solid var(--scrollbar-track);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
 }
 
 button,

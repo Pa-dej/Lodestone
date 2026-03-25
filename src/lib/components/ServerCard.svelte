@@ -5,12 +5,14 @@
   import RestartIcon from "../../icons/Restart.svg?raw";
   import UsersIcon from "../../icons/Users.svg?raw";
   import TrashIcon from "../../icons/Trash.svg?raw";
+  import FolderOpenIcon from "../../icons/FolderOpen.svg?raw";
   import PaperIcon from "../../icons/servers/Paper.svg?raw";
   import PurpurIcon from "../../icons/servers/Purpur.svg?raw";
   import FabricIcon from "../../icons/servers/Fabric.svg?raw";
   import ForgeIcon from "../../icons/servers/Forge.svg?raw";
   import FoliaIcon from "../../icons/servers/Folia.svg?raw";
   import VanillaIcon from "../../icons/Server.svg?raw";
+  import { t } from "$lib/stores/i18n.svelte";
 
   import { isServerRestarting } from "$lib/stores/servers.svelte";
 
@@ -20,6 +22,7 @@
     onStop: (id: string) => void;
     onRestart: (id: string) => void;
     onDelete: (id: string) => void;
+    onOpenFolder: (id: string) => void;
     onOpenConsole: (id: string) => void;
   }
 
@@ -28,7 +31,7 @@
     color: string;
   }
 
-  let { server, onStart, onStop, onRestart, onDelete, onOpenConsole }: Props = $props();
+  let { server, onStart, onStop, onRestart, onDelete, onOpenFolder, onOpenConsole }: Props = $props();
 
   const isRestarting = $derived(isServerRestarting(server.id));
 
@@ -53,12 +56,20 @@
     </div>
     <div class="server-head-right">
       <span class="badge badge-muted badge-dot" class:badge-running={server.running}>
-        {server.running ? "Running" : "Stopped"}
+        {server.running ? t("status_running") : t("status_stopped")}
       </span>
+      <button
+        type="button"
+        class="btn-icon btn-folder"
+        title={t("open_in_explorer")}
+        onclick={() => onOpenFolder(server.id)}
+      >
+        {@html FolderOpenIcon}
+      </button>
       <button 
         type="button" 
         class="btn-icon btn-delete" 
-        title="Удалить сервер"
+        title={t("delete_server_title")}
         disabled={server.running}
         onclick={() => onDelete(server.id)}
       >
@@ -74,7 +85,7 @@
     <div class="server-online">
       <span class="online-icon">{@html UsersIcon}</span>
       <span class="online-text">
-        {server.online_players}/{server.max_players ?? 20} игроков
+        {server.online_players}/{server.max_players ?? 20} {t("players_count")}
       </span>
     </div>
   {/if}
@@ -87,7 +98,7 @@
         disabled={isRestarting}
         onclick={() => onStop(server.id)}
       >
-        ■ Stop
+        ■ {t("action_stop")}
       </button>
       <button 
         type="button" 
@@ -98,17 +109,17 @@
         onclick={() => onRestart(server.id)}
       >
         <span class="btn-icon-inline" class:spinning={isRestarting}>{@html RestartIcon}</span>
-        <span>{isRestarting ? 'Restarting...' : 'Restart'}</span>
+        <span>{isRestarting ? t("action_restarting") : t("action_restart")}</span>
       </button>
     {:else}
       <button type="button" class="btn btn-primary btn-sm" onclick={() => onStart(server.id)}>
         <span class="btn-icon-inline">{@html PlayIcon}</span>
-        <span>Start</span>
+        <span>{t("action_start")}</span>
       </button>
     {/if}
     <button type="button" class="btn btn-secondary btn-sm" onclick={() => onOpenConsole(server.id)}>
       <span class="btn-icon-inline">{@html TerminalIcon}</span>
-      <span>Console</span>
+      <span>{t("action_console")}</span>
     </button>
   </div>
 </article>
@@ -190,6 +201,26 @@
     gap: 8px;
   }
 
+  .btn-folder {
+    width: 28px;
+    height: 28px;
+    color: var(--text-hint);
+    background: transparent;
+    border: 0.5px solid transparent;
+    transition: all var(--tr);
+  }
+
+  .btn-folder:hover:not(:disabled) {
+    color: var(--accent);
+    background: var(--accent-bg);
+    border-color: var(--accent);
+  }
+
+  .btn-folder :global(svg) {
+    width: 14px;
+    height: 14px;
+  }
+
   .btn-delete {
     width: 28px;
     height: 28px;
@@ -216,44 +247,25 @@
   }
 
   .server-icon {
-    position: relative;
     width: 42px;
     height: 42px;
     border-radius: var(--r-md);
     color: var(--core-color);
-    background: linear-gradient(145deg, var(--surface-2), var(--surface));
+    background: var(--surface-2);
     display: grid;
     place-items: center;
     font-size: 20px;
     border: 0.5px solid var(--border);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      0 8px 16px rgba(0, 0, 0, 0.12);
-  }
-
-  .server-icon::before {
-    content: "";
-    position: absolute;
-    inset: 3px;
-    border-radius: calc(var(--r-md) - 3px);
-    background: radial-gradient(circle at 28% 25%, rgba(255, 255, 255, 0.22), transparent 60%);
-    pointer-events: none;
-    opacity: 0.55;
   }
 
   .server-icon :global(svg) {
-    position: relative;
-    z-index: 1;
     width: 20px;
     height: 20px;
   }
 
   .server-icon.running {
+    background: var(--accent-bg);
     border-color: var(--core-color);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.14),
-      0 0 0 1px rgba(0, 0, 0, 0.08),
-      0 10px 18px rgba(0, 0, 0, 0.18);
   }
 
   .badge-running {

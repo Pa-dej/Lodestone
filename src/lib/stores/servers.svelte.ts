@@ -6,6 +6,7 @@ import type {
   CoreType,
   DownloadProgress,
   NewServerConfig,
+  ServerPropertyEntry,
   ServerConfig,
 } from "$lib/types";
 import { toConsoleEntry } from "$lib/utils/console";
@@ -204,6 +205,38 @@ export async function deleteServer(id: string): Promise<void> {
     await loadServers();
   } catch (error) {
     setServerError(error);
+  }
+}
+
+export async function openServerFolder(id: string): Promise<void> {
+  serverState.error = null;
+  try {
+    await invoke("open_server_folder", { id });
+  } catch (error) {
+    setServerError(error);
+  }
+}
+
+export async function getServerProperties(id: string): Promise<ServerPropertyEntry[]> {
+  try {
+    return await invoke<ServerPropertyEntry[]>("get_server_properties", { id });
+  } catch (error) {
+    setServerError(error);
+    return [];
+  }
+}
+
+export async function saveServerProperties(
+  id: string,
+  entries: ServerPropertyEntry[],
+): Promise<boolean> {
+  try {
+    await invoke("save_server_properties", { id, entries });
+    await loadServers();
+    return true;
+  } catch (error) {
+    setServerError(error);
+    return false;
   }
 }
 

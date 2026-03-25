@@ -39,6 +39,11 @@ export interface ServerPropertiesConfig {
   view_distance: number;
 }
 
+export interface ServerPropertyEntry {
+  key: string;
+  value: string;
+}
+
 export interface ConsoleLine {
   server_id: string;
   line: string;

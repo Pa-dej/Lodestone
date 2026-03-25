@@ -5,6 +5,7 @@
   import Topbar from "$lib/components/Topbar.svelte";
   import { initServers, serverState, startPollingServers, startServer, stopPollingServers } from "$lib/stores/servers.svelte";
   import { loadSettings, settingsState } from "$lib/stores/settings.svelte";
+  import { t } from "$lib/stores/i18n.svelte";
   let { children } = $props();
 
   let bootError = $state<string | null>(null);
@@ -46,12 +47,12 @@
         <div class="alert alert-danger">
           <span class="alert-icon">✕</span>
           <div class="alert-text">
-            <div class="alert-title">Ошибка загрузки</div>
+            <div class="alert-title">{t("error_title")}</div>
             <div class="alert-sub">{bootError}</div>
           </div>
         </div>
       {:else if !initialized}
-        <div class="panel loading-panel">Загрузка...</div>
+        <div class="panel loading-panel">{t("loading")}</div>
       {/if}
       {@render children()}
     </main>
