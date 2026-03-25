@@ -4,6 +4,7 @@
   import TerminalIcon from "../../icons/Terminal.svg?raw";
   import RestartIcon from "../../icons/Restart.svg?raw";
   import UsersIcon from "../../icons/Users.svg?raw";
+  import TrashIcon from "../../icons/Trash.svg?raw";
   import PaperIcon from "../../icons/servers/Paper.svg?raw";
   import PurpurIcon from "../../icons/servers/Purpur.svg?raw";
   import FabricIcon from "../../icons/servers/Fabric.svg?raw";
@@ -18,6 +19,7 @@
     onStart: (id: string) => void;
     onStop: (id: string) => void;
     onRestart: (id: string) => void;
+    onDelete: (id: string) => void;
     onOpenConsole: (id: string) => void;
   }
 
@@ -26,7 +28,7 @@
     color: string;
   }
 
-  let { server, onStart, onStop, onRestart, onOpenConsole }: Props = $props();
+  let { server, onStart, onStop, onRestart, onDelete, onOpenConsole }: Props = $props();
 
   const isRestarting = $derived(isServerRestarting(server.id));
 
@@ -45,19 +47,30 @@
     <div class="server-icon" class:running={server.running} style={`color:${coreVisuals[server.core].color}`}>
       {@html coreVisuals[server.core].iconSvg}
     </div>
-    <span class="badge badge-muted badge-dot" class:badge-running={server.running}>
-      {server.running ? "Running" : "Stopped"}
-    </span>
+    <div class="server-head-right">
+      <span class="badge badge-muted badge-dot" class:badge-running={server.running}>
+        {server.running ? "Running" : "Stopped"}
+      </span>
+      <button 
+        type="button" 
+        class="btn-icon btn-delete" 
+        title="Удалить сервер"
+        disabled={server.running}
+        onclick={() => onDelete(server.id)}
+      >
+        {@html TrashIcon}
+      </button>
+    </div>
   </div>
 
   <h3 class="server-name">{server.name}</h3>
   <p class="server-meta">{server.core} · {server.version} · :{server.port}</p>
   
-  {#if server.running && (server.online_players !== null && server.online_players !== undefined) || (server.max_players !== null && server.max_players !== undefined)}
+  {#if server.running && server.online_players !== null && server.online_players !== undefined && server.online_players > 0}
     <div class="server-online">
       <span class="online-icon">{@html UsersIcon}</span>
       <span class="online-text">
-        {server.online_players ?? 0}/{server.max_players ?? 20} игроков
+        {server.online_players}/{server.max_players ?? 20} игроков
       </span>
     </div>
   {/if}
@@ -113,6 +126,37 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
+  }
+
+  .server-head-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-delete {
+    width: 28px;
+    height: 28px;
+    color: var(--text-hint);
+    background: transparent;
+    border: 0.5px solid transparent;
+    transition: all var(--tr);
+  }
+
+  .btn-delete:hover:not(:disabled) {
+    color: var(--error-color);
+    background: var(--error-bg);
+    border-color: var(--error-color);
+  }
+
+  .btn-delete:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .btn-delete :global(svg) {
+    width: 14px;
+    height: 14px;
   }
 
   .server-icon {

@@ -3,7 +3,7 @@
   import NewServerModal from "$lib/components/NewServerModal.svelte";
   import ServerAddCard from "$lib/components/ServerAddCard.svelte";
   import ServerCard from "$lib/components/ServerCard.svelte";
-  import { openConsoleTab, serverState, startServer, stopServer, restartServer } from "$lib/stores/servers.svelte";
+  import { openConsoleTab, serverState, startServer, stopServer, restartServer, deleteServer } from "$lib/stores/servers.svelte";
 
   let isModalOpen = $state(false);
 
@@ -44,6 +44,11 @@
         }}
         onRestart={(id) => {
           void restartServer(id);
+        }}
+        onDelete={(id) => {
+          if (confirm(`Вы уверены, что хотите удалить сервер "${server.name}"? Это действие нельзя отменить.`)) {
+            void deleteServer(id);
+          }
         }}
         onOpenConsole={openConsole}
       />

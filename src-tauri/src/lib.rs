@@ -116,6 +116,7 @@ struct DownloadProgressPayload {
 #[derive(Clone)]
 struct RunningServer {
     stdin: Arc<AsyncMutex<ChildStdin>>,
+    recent_lines: Arc<AsyncMutex<Vec<String>>>, // Кэш последних строк консоли
 }
 
 #[derive(Clone, Default)]
@@ -827,7 +828,12 @@ async fn install_core_jar(
     Ok(())
 }
 
-fn spawn_console_reader<R>(app_handle: AppHandle, server_id: String, reader: R)
+fn spawn_console_reader<R>(
+    app_handle: AppHandle, 
+    server_id: String, 
+    reader: R,
+    recent_lines: Arc<AsyncMutex<Vec<String>>>,
+)
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
@@ -836,6 +842,16 @@ where
         while let Ok(Some(raw_line)) = lines.next_line().await {
             let stripped = strip_ansi_escapes::strip(raw_line.as_bytes());
             let normalized = String::from_utf8_lossy(&stripped).to_string();
+            
+            // Сохраняем строку в кэш (последние 50 строк)
+            {
+                let mut cache = recent_lines.lock().await;
+                cache.push(normalized.clone());
+                if cache.len() > 50 {
+                    cache.remove(0);
+                }
+            }
+            
             emit_console_line(&app_handle, &server_id, normalized);
         }
     });
@@ -926,22 +942,131 @@ async fn get_server_stats_internal(
         running_map.get(id).cloned()
     };
 
-    let Some(_server) = running else {
+    let Some(server) = running else {
         return Ok((None, None));
     };
 
-    // Тестовые данные для демонстрации
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    // Получаем max_players из server.properties
+    let max_players = get_max_players_from_properties(id).await.unwrap_or(20);
+
+    // Получаем количество игроков из консоли (не отправляя команды)
+    match get_online_players_count(&server, id).await {
+        Ok(online_count) => {
+            // Всегда возвращаем данные, даже если игроков 0
+            // UI сам решит показывать ли блок статистики
+            Ok((Some(online_count), Some(max_players)))
+        }
+        Err(_) => {
+            // В случае ошибки парсинга не показываем статистику
+            Ok((None, None))
+        }
+    }
+}
+
+// Функция для получения количества онлайн игроков
+async fn get_online_players_count(
+    server: &RunningServer,
+    server_id: &str,
+) -> Result<u32, String> {
+    // НЕ отправляем команду list - парсим только существующие строки консоли
+    // Команда list уже отправляется сервером автоматически или пользователем
     
-    let mut hasher = DefaultHasher::new();
-    id.hash(&mut hasher);
-    let hash = hasher.finish();
+    // Парсим последние строки консоли для поиска ответа на команду list
+    {
+        let recent_lines = server.recent_lines.lock().await;
+        
+        // Ищем в последних 20 строках любые упоминания количества игроков
+        for line in recent_lines.iter().rev().take(20) {
+            if let Some(count) = parse_player_count_from_line(line) {
+                return Ok(count);
+            }
+        }
+    }
+
+    // Если не нашли информацию о игроках, возвращаем 0
+    Ok(0)
+}
+
+// Функция для парсинга количества игроков из строки консоли
+fn parse_player_count_from_line(line: &str) -> Option<u32> {
+    let line_lower = line.to_lowercase();
     
-    let online_players = (hash % 5) as u32; // 0-4 игрока
-    let max_players = 20u32; // Стандартное значение
+    // Основной паттерн: "There are X of a max of Y players online"
+    // Пример: "[19:31:23 INFO]: There are 0 of a max of 20 players online:"
+    if line_lower.contains("there are") && line_lower.contains("of a max of") && line_lower.contains("players online") {
+        // Ищем числа в строке
+        let words: Vec<&str> = line.split_whitespace().collect();
+        for (i, word) in words.iter().enumerate() {
+            if word.to_lowercase() == "are" && i + 1 < words.len() {
+                // Следующее слово после "are" должно быть количество игроков
+                let count_word = words[i + 1];
+                if let Ok(count) = count_word.parse::<u32>() {
+                    return Some(count);
+                }
+            }
+        }
+    }
     
-    Ok((Some(online_players), Some(max_players)))
+    // Альтернативный паттерн: "There are X players online"
+    if line_lower.contains("there are") && line_lower.contains("players online") && !line_lower.contains("of a max of") {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        for (i, word) in words.iter().enumerate() {
+            if word.to_lowercase() == "are" && i + 1 < words.len() {
+                let count_word = words[i + 1];
+                if let Ok(count) = count_word.parse::<u32>() {
+                    return Some(count);
+                }
+            }
+        }
+    }
+    
+    // Паттерн для списка игроков: "Online players (X): Player1, Player2"
+    if line_lower.contains("online players") && line_lower.contains("(") && line_lower.contains(")") {
+        if let Some(start) = line_lower.find('(') {
+            if let Some(end) = line_lower.find(')') {
+                if start < end {
+                    let count_str = &line_lower[start + 1..end];
+                    if let Ok(count) = count_str.parse::<u32>() {
+                        return Some(count);
+                    }
+                }
+            }
+        }
+    }
+    
+    None
+}
+
+// Функция для получения max-players из server.properties
+async fn get_max_players_from_properties(server_id: &str) -> Result<u32, String> {
+    let servers = load_servers_from_disk().await?;
+    let server = servers
+        .iter()
+        .find(|s| s.id == server_id)
+        .ok_or("Server not found")?;
+
+    let properties_path = server.path.join("server.properties");
+    
+    if !properties_path.exists() {
+        return Ok(20); // Значение по умолчанию
+    }
+
+    let content = tokio_fs::read_to_string(&properties_path)
+        .await
+        .map_err(|e| format!("Failed to read server.properties: {}", e))?;
+
+    // Парсим max-players из server.properties
+    for line in content.lines() {
+        if line.starts_with("max-players=") {
+            if let Some(value_str) = line.split('=').nth(1) {
+                if let Ok(value) = value_str.trim().parse::<u32>() {
+                    return Ok(value);
+                }
+            }
+        }
+    }
+
+    Ok(20) // Значение по умолчанию
 }
 
 #[tauri::command]
@@ -1079,8 +1204,11 @@ async fn start_server(
     let child_handle = Arc::new(AsyncMutex::new(child));
     let running_server = RunningServer {
         stdin: Arc::new(AsyncMutex::new(stdin)),
+        recent_lines: Arc::new(AsyncMutex::new(Vec::new())),
     };
 
+    let recent_lines = running_server.recent_lines.clone();
+    
     {
         let mut running = state.running.lock().await;
         running.insert(server.id.clone(), running_server);
@@ -1088,8 +1216,8 @@ async fn start_server(
 
     let _ = set_server_running_flag(&server.id, true).await;
 
-    spawn_console_reader(app_handle.clone(), server.id.clone(), stdout);
-    spawn_console_reader(app_handle.clone(), server.id.clone(), stderr);
+    spawn_console_reader(app_handle.clone(), server.id.clone(), stdout, recent_lines.clone());
+    spawn_console_reader(app_handle.clone(), server.id.clone(), stderr, recent_lines.clone());
     spawn_process_watcher(
         app_handle.clone(),
         state.inner().clone(),
