@@ -42,9 +42,13 @@
   };
 </script>
 
-<article class="card server-card" class:running={server.running}>
+<article class="card server-card" class:running={server.running} style={`--core-color:${coreVisuals[server.core].color}`}>
+  <div class="server-bg-icon" aria-hidden="true">
+    {@html coreVisuals[server.core].iconSvg}
+  </div>
+
   <div class="server-head">
-    <div class="server-icon" class:running={server.running} style={`color:${coreVisuals[server.core].color}`}>
+    <div class="server-icon" class:running={server.running}>
       {@html coreVisuals[server.core].iconSvg}
     </div>
     <div class="server-head-right">
@@ -111,14 +115,66 @@
 
 <style>
   .server-card {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
     display: flex;
     flex-direction: column;
     gap: 12px;
     min-height: 180px;
   }
 
+  .server-card > :not(.server-bg-icon) {
+    position: relative;
+    z-index: 1;
+  }
+
   .server-card.running {
     border-color: var(--accent);
+  }
+
+  .server-bg-icon {
+    position: absolute;
+    right: -58px;
+    bottom: -54px;
+    width: 230px;
+    height: 230px;
+    color: var(--core-color);
+    opacity: 0.08;
+    transform: rotate(-14deg);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .server-bg-icon :global(svg) {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .server-bg-icon :global(path),
+  .server-bg-icon :global(circle),
+  .server-bg-icon :global(rect),
+  .server-bg-icon :global(polygon),
+  .server-bg-icon :global(polyline),
+  .server-bg-icon :global(ellipse),
+  .server-bg-icon :global(line) {
+    stroke: currentColor !important;
+  }
+
+  .server-bg-icon :global(path[fill="none"]),
+  .server-bg-icon :global(circle[fill="none"]),
+  .server-bg-icon :global(rect[fill="none"]),
+  .server-bg-icon :global(polygon[fill="none"]),
+  .server-bg-icon :global(polyline[fill="none"]),
+  .server-bg-icon :global(ellipse[fill="none"]),
+  .server-bg-icon :global(line[fill="none"]) {
+    fill: none !important;
+  }
+
+  .server-bg-icon :global(svg > path[d="M0 0h24v24H0z"]) {
+    stroke: none !important;
+    fill: none !important;
   }
 
   .server-head {
@@ -160,24 +216,44 @@
   }
 
   .server-icon {
+    position: relative;
     width: 42px;
     height: 42px;
     border-radius: var(--r-md);
-    background: var(--surface-2);
+    color: var(--core-color);
+    background: linear-gradient(145deg, var(--surface-2), var(--surface));
     display: grid;
     place-items: center;
     font-size: 20px;
     border: 0.5px solid var(--border);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      0 8px 16px rgba(0, 0, 0, 0.12);
+  }
+
+  .server-icon::before {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border-radius: calc(var(--r-md) - 3px);
+    background: radial-gradient(circle at 28% 25%, rgba(255, 255, 255, 0.22), transparent 60%);
+    pointer-events: none;
+    opacity: 0.55;
   }
 
   .server-icon :global(svg) {
+    position: relative;
+    z-index: 1;
     width: 20px;
     height: 20px;
   }
 
   .server-icon.running {
-    background: var(--accent-bg);
-    border-color: var(--accent);
+    border-color: var(--core-color);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      0 0 0 1px rgba(0, 0, 0, 0.08),
+      0 10px 18px rgba(0, 0, 0, 0.18);
   }
 
   .badge-running {
