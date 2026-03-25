@@ -2,6 +2,8 @@
   import type { CoreType, ServerConfig } from "$lib/types";
   import PlayIcon from "../../icons/Play.svg?raw";
   import TerminalIcon from "../../icons/Terminal.svg?raw";
+  import RestartIcon from "../../icons/Restart.svg?raw";
+  import UsersIcon from "../../icons/Users.svg?raw";
   import PaperIcon from "../../icons/servers/Paper.svg?raw";
   import PurpurIcon from "../../icons/servers/Purpur.svg?raw";
   import FabricIcon from "../../icons/servers/Fabric.svg?raw";
@@ -9,10 +11,13 @@
   import FoliaIcon from "../../icons/servers/Folia.svg?raw";
   import VanillaIcon from "../../icons/Server.svg?raw";
 
+  import { isServerRestarting } from "$lib/stores/servers.svelte";
+
   interface Props {
     server: ServerConfig;
     onStart: (id: string) => void;
     onStop: (id: string) => void;
+    onRestart: (id: string) => void;
     onOpenConsole: (id: string) => void;
   }
 
@@ -21,7 +26,9 @@
     color: string;
   }
 
-  let { server, onStart, onStop, onOpenConsole }: Props = $props();
+  let { server, onStart, onStop, onRestart, onOpenConsole }: Props = $props();
+
+  const isRestarting = $derived(isServerRestarting(server.id));
 
   const coreVisuals: Record<CoreType, CoreVisual> = {
     paper: { iconSvg: PaperIcon, color: "var(--core-paper)" },
@@ -45,11 +52,36 @@
 
   <h3 class="server-name">{server.name}</h3>
   <p class="server-meta">{server.core} · {server.version} · :{server.port}</p>
+  
+  {#if server.running && (server.online_players !== null && server.online_players !== undefined) || (server.max_players !== null && server.max_players !== undefined)}
+    <div class="server-online">
+      <span class="online-icon">{@html UsersIcon}</span>
+      <span class="online-text">
+        {server.online_players ?? 0}/{server.max_players ?? 20} игроков
+      </span>
+    </div>
+  {/if}
 
   <div class="server-actions">
     {#if server.running}
-      <button type="button" class="btn btn-danger btn-sm" onclick={() => onStop(server.id)}>
+      <button 
+        type="button" 
+        class="btn btn-danger btn-sm" 
+        disabled={isRestarting}
+        onclick={() => onStop(server.id)}
+      >
         ■ Stop
+      </button>
+      <button 
+        type="button" 
+        class="btn btn-sm"
+        class:btn-warning={isRestarting}
+        class:btn-secondary={!isRestarting}
+        disabled={isRestarting}
+        onclick={() => onRestart(server.id)}
+      >
+        <span class="btn-icon-inline" class:spinning={isRestarting}>{@html RestartIcon}</span>
+        <span>{isRestarting ? 'Restarting...' : 'Restart'}</span>
       </button>
     {:else}
       <button type="button" class="btn btn-primary btn-sm" onclick={() => onStart(server.id)}>
@@ -122,6 +154,35 @@
     text-transform: lowercase;
   }
 
+  .server-online {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    background: var(--accent-bg);
+    border: 0.5px solid var(--accent);
+    border-radius: var(--r-sm);
+    font-size: 11px;
+    color: var(--accent);
+  }
+
+  .online-icon {
+    width: 12px;
+    height: 12px;
+    display: grid;
+    place-items: center;
+  }
+
+  .online-icon :global(svg) {
+    width: 12px;
+    height: 12px;
+    stroke-width: 2;
+  }
+
+  .online-text {
+    font-weight: 500;
+  }
+
   .server-actions {
     margin-top: auto;
     display: flex;
@@ -140,5 +201,29 @@
     width: 12px;
     height: 12px;
     stroke-width: 2.5;
+  }
+
+  .spinning {
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  .btn:disabled:hover {
+    transform: none;
+    opacity: 0.7;
   }
 </style>

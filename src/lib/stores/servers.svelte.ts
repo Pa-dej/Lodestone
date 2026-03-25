@@ -22,6 +22,8 @@ interface ServerStoreState {
   creating: boolean;
   createError: string | null;
   download: DownloadProgress | null;
+  restartingServers: string[];
+  serverCommands: Record<string, string[]>;
 }
 
 const MAX_CONSOLE_LINES = 2500;
@@ -38,6 +40,8 @@ export const serverState = $state<ServerStoreState>({
   creating: false,
   createError: null,
   download: null,
+  restartingServers: [],
+  serverCommands: {},
 });
 
 let consoleUnlisten: UnlistenFn | null = null;
@@ -145,6 +149,7 @@ export async function startServer(id: string): Promise<void> {
   serverState.error = null;
   try {
     await invoke("start_server", { id });
+    clearServerCommandsCache(id); // Очищаем кэш команд при старте
     await loadServers();
   } catch (error) {
     setServerError(error);
@@ -155,9 +160,35 @@ export async function stopServer(id: string): Promise<void> {
   serverState.error = null;
   try {
     await invoke("stop_server", { id });
+    clearServerCommandsCache(id); // Очищаем кэш команд при остановке
     await loadServers();
   } catch (error) {
     setServerError(error);
+  }
+}
+
+export async function restartServer(id: string): Promise<void> {
+  // Проверяем, не перезапускается ли уже сервер
+  if (serverState.restartingServers.includes(id)) {
+    return;
+  }
+  
+  serverState.error = null;
+  
+  // Добавляем сервер в список перезапускающихся
+  serverState.restartingServers = [...serverState.restartingServers, id];
+  
+  try {
+    await invoke("stop_server", { id });
+    // Ждем немного, чтобы сервер полностью остановился
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    await invoke("start_server", { id });
+    await loadServers();
+  } catch (error) {
+    setServerError(error);
+  } finally {
+    // Убираем сервер из списка перезапускающихся
+    serverState.restartingServers = serverState.restartingServers.filter(serverId => serverId !== id);
   }
 }
 
@@ -192,6 +223,49 @@ export async function sendServerCommand(id: string, command: string): Promise<vo
     }
   } catch (error) {
     setServerError(error);
+  }
+}
+
+export async function getServerCommands(id: string): Promise<string[]> {
+  // Проверяем кэш
+  if (serverState.serverCommands[id]) {
+    return serverState.serverCommands[id];
+  }
+  
+  try {
+    const commands = await invoke<string[]>("get_server_commands", { id });
+    // Кэшируем результат
+    serverState.serverCommands = {
+      ...serverState.serverCommands,
+      [id]: commands
+    };
+    return commands;
+  } catch (error) {
+    console.error("Failed to get server commands:", error);
+    // Возвращаем базовые команды в случае ошибки
+    const fallbackCommands = [
+      "help",
+      "list", 
+      "stop",
+      "save-all",
+      "reload",
+      "restart"
+    ];
+    // Кэшируем fallback команды
+    serverState.serverCommands = {
+      ...serverState.serverCommands,
+      [id]: fallbackCommands
+    };
+    return fallbackCommands;
+  }
+}
+
+export function clearServerCommandsCache(id?: string): void {
+  if (id) {
+    const { [id]: _, ...rest } = serverState.serverCommands;
+    serverState.serverCommands = rest;
+  } else {
+    serverState.serverCommands = {};
   }
 }
 
@@ -254,6 +328,14 @@ export function getServerById(id: string | null): ServerConfig | null {
     return null;
   }
   return serverState.servers.find((server) => server.id === id) ?? null;
+}
+
+export function isServerRestarting(id: string): boolean {
+  return serverState.restartingServers.includes(id);
+}
+
+export function clearRestartingState(): void {
+  serverState.restartingServers = [];
 }
 
 export function shutdownServerStore(): void {

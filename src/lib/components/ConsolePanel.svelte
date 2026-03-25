@@ -6,6 +6,7 @@
     clearConsole,
     getCommandHistory,
     getServerById,
+    getServerCommands,
     sendServerCommand,
     serverState,
     setAutoScroll,
@@ -23,43 +24,38 @@
   let tabCandidates = $state<string[]>([]);
   let tabCandidateIndex = $state(0);
   let tabPrefix = $state("");
-
-  const commandSuggestions: string[] = [
-    "/help",
-    "/list",
-    "/say",
-    "/stop",
-    "/save-all",
-    "/save-on",
-    "/save-off",
-    "/time set day",
-    "/time set night",
-    "/weather clear",
-    "/weather rain",
-    "/gamerule keepInventory true",
-    "/difficulty",
-    "/gamemode",
-    "/tp",
-    "/whitelist on",
-    "/whitelist off",
-    "/whitelist add",
-    "/ban",
-    "/pardon",
-    "/kick",
-    "/op",
-    "/deop",
-  ];
+  let showCompletions = $state(false);
+  let lastTabTime = $state(0);
+  let completionStartPos = $state(0);
+  let commandSuggestions = $state<string[]>([]);
+  let selectedCompletionIndex = $state(-1);
 
   const selectedServer = $derived(getServerById(serverId));
   const lines = $derived((serverId ? serverState.consoleLines[serverId] : []) ?? []);
   const isAutoScrollEnabled = $derived((serverId ? serverState.autoScrollByServer[serverId] : true) ?? true);
-  const filteredSuggestions = $derived.by(() => {
-    const input = commandInput.trim().toLowerCase();
-    if (!input) {
-      return commandSuggestions.slice(0, 8);
+
+  async function loadServerCommands(): Promise<void> {
+    if (!serverId) {
+      commandSuggestions = [];
+      return;
     }
-    return commandSuggestions.filter((entry) => entry.startsWith(input)).slice(0, 8);
-  });
+    
+    try {
+      const commands = await getServerCommands(serverId);
+      commandSuggestions = commands;
+    } catch (error) {
+      console.error("Failed to load server commands:", error);
+      // Fallback к базовым командам
+      commandSuggestions = [
+        "help",
+        "list",
+        "stop", 
+        "save-all",
+        "reload",
+        "restart"
+      ];
+    }
+  }
 
   async function submitCommand(): Promise<void> {
     if (!serverId || !commandInput.trim()) {
@@ -70,6 +66,8 @@
     historyCursor = null;
     tabCandidates = [];
     tabPrefix = "";
+    showCompletions = false;
+    selectedCompletionIndex = -1;
   }
 
   function handleScroll(): void {
@@ -81,24 +79,117 @@
   }
 
   function applyTabCompletion(): void {
+    const currentTime = Date.now();
+    const isDoubleTab = currentTime - lastTabTime < 500; // 500ms для двойного Tab
+    
     const value = commandInput.trim();
     if (!value) {
+      lastTabTime = currentTime;
       return;
     }
 
-    const prefix = value.toLowerCase();
-    if (prefix !== tabPrefix) {
-      tabCandidates = commandSuggestions.filter((entry) => entry.startsWith(prefix));
-      tabPrefix = prefix;
-      tabCandidateIndex = 0;
-    }
+    // Находим позицию для автодополнения (последнее слово)
+    const words = value.split(/\s+/);
+    const currentWord = words[words.length - 1];
+    const beforeCurrentWord = value.substring(0, value.lastIndexOf(currentWord));
+    
+    // Нормализуем поисковый термин (убираем "/" если есть)
+    const searchTerm = currentWord.startsWith('/') ? currentWord.slice(1) : currentWord;
+    
+    // Ищем подходящие команды
+    const matches = commandSuggestions.filter((cmd) => 
+      cmd.toLowerCase().startsWith(searchTerm.toLowerCase())
+    );
 
-    if (tabCandidates.length === 0) {
+    if (matches.length === 0) {
+      showCompletions = false;
+      lastTabTime = currentTime;
       return;
     }
 
-    commandInput = tabCandidates[tabCandidateIndex];
-    tabCandidateIndex = (tabCandidateIndex + 1) % tabCandidates.length;
+    if (matches.length === 1) {
+      // Единственное совпадение - автоматически дополняем
+      const completion = matches[0];
+      commandInput = beforeCurrentWord + completion;
+      showCompletions = false;
+      tabCandidates = [];
+    } else {
+      // Несколько совпадений
+      if (!isDoubleTab && !showCompletions) {
+        // Первый Tab - дополняем общую часть
+        const commonPrefix = findCommonPrefix(matches);
+        if (commonPrefix.length > searchTerm.length) {
+          commandInput = beforeCurrentWord + commonPrefix;
+          showCompletions = false;
+        } else {
+          // Общей части нет больше - показываем варианты
+          showCompletions = true;
+          tabCandidates = matches;
+          selectedCompletionIndex = -1;
+        }
+      } else {
+        // Второй Tab или уже показаны варианты - показываем/обновляем все варианты
+        showCompletions = true;
+        tabCandidates = matches;
+        selectedCompletionIndex = -1; // Сбрасываем выбор при показе списка
+      }
+    }
+    
+    lastTabTime = currentTime;
+  }
+
+  function findCommonPrefix(strings: string[]): string {
+    if (strings.length === 0) return "";
+    if (strings.length === 1) return strings[0];
+    
+    let prefix = strings[0];
+    for (let i = 1; i < strings.length; i++) {
+      while (strings[i].toLowerCase().indexOf(prefix.toLowerCase()) !== 0) {
+        prefix = prefix.substring(0, prefix.length - 1);
+        if (prefix === "") return "";
+      }
+    }
+    return prefix;
+  }
+
+  function handleCommandInput(): void {
+    // Показываем автодополнение при вводе
+    const value = commandInput.trim();
+    if (value.length > 0) {
+      const words = value.split(/\s+/);
+      const currentWord = words[words.length - 1];
+      
+      // Нормализуем поисковый термин (убираем "/" если есть)
+      const searchTerm = currentWord.startsWith('/') ? currentWord.slice(1) : currentWord;
+      
+      // Ищем команды
+      const matches = commandSuggestions.filter((cmd) => 
+        cmd.toLowerCase().startsWith(searchTerm.toLowerCase())
+      );
+      
+      if (matches.length > 0 && matches.length <= 8) {
+        tabCandidates = matches;
+        showCompletions = true;
+        selectedCompletionIndex = -1; // Сбрасываем выбор при автоматическом показе
+      } else {
+        showCompletions = false;
+      }
+    } else {
+      showCompletions = false;
+    }
+  }
+
+  function selectCompletion(completion: string): void {
+    const value = commandInput.trim();
+    const words = value.split(/\s+/);
+    const currentWord = words[words.length - 1];
+    const beforeCurrentWord = value.substring(0, value.lastIndexOf(currentWord));
+    
+    commandInput = beforeCurrentWord + completion;
+    showCompletions = false;
+    tabCandidates = [];
+    selectedCompletionIndex = -1;
+    lastTabTime = 0;
   }
 
   function handleHistoryNavigation(direction: "up" | "down"): void {
@@ -140,20 +231,55 @@
       return;
     }
 
+    if (event.key === "Escape") {
+      showCompletions = false;
+      tabCandidates = [];
+      selectedCompletionIndex = -1;
+      lastTabTime = 0;
+      return;
+    }
+
+    if (event.key === "Enter" && showCompletions && selectedCompletionIndex >= 0) {
+      // Выбираем выделенную команду
+      event.preventDefault();
+      selectCompletion(tabCandidates[selectedCompletionIndex]);
+      return;
+    }
+
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      handleHistoryNavigation("up");
+      if (showCompletions && tabCandidates.length > 0) {
+        // Навигация по подсказкам
+        selectedCompletionIndex = selectedCompletionIndex <= 0 
+          ? tabCandidates.length - 1 
+          : selectedCompletionIndex - 1;
+      } else {
+        // Навигация по истории команд
+        handleHistoryNavigation("up");
+      }
       return;
     }
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      handleHistoryNavigation("down");
+      if (showCompletions && tabCandidates.length > 0) {
+        // Навигация по подсказкам
+        selectedCompletionIndex = selectedCompletionIndex >= tabCandidates.length - 1 
+          ? 0 
+          : selectedCompletionIndex + 1;
+      } else {
+        // Навигация по истории команд
+        handleHistoryNavigation("down");
+      }
       return;
     }
 
+    // Скрываем автодополнение при вводе
+    showCompletions = false;
     tabCandidates = [];
     tabPrefix = "";
+    selectedCompletionIndex = -1;
+    lastTabTime = 0;
   }
 
   $effect(() => {
@@ -161,9 +287,19 @@
       return;
     }
     void attachConsole(serverId);
+    void loadServerCommands(); // Загружаем команды при смене сервера
     historyCursor = null;
     tabCandidates = [];
     tabPrefix = "";
+    showCompletions = false;
+    selectedCompletionIndex = -1;
+  });
+
+  // Перезагружаем команды при изменении состояния сервера (запуск/остановка)
+  $effect(() => {
+    if (selectedServer?.running !== undefined) {
+      void loadServerCommands();
+    }
   });
 
   $effect(() => {
@@ -227,21 +363,40 @@
         void submitCommand();
       }}
     >
-      <datalist id="command-suggestions">
-        {#each filteredSuggestions as suggestion}
-          <option value={suggestion}></option>
-        {/each}
-      </datalist>
-      <input
-        class="input command-input"
-        bind:value={commandInput}
-        placeholder="Введите команду..."
-        list="command-suggestions"
-        onkeydown={handleCommandKeydown}
-      />
+      <div class="command-input-container">
+        <input
+          class="input command-input"
+          bind:value={commandInput}
+          placeholder="Введите команду..."
+          onkeydown={handleCommandKeydown}
+          oninput={handleCommandInput}
+        />
+        {#if showCompletions && tabCandidates.length > 0}
+          <div class="completions-popup">
+            <div class="completions-header">
+              Доступные команды ({tabCandidates.length}):
+            </div>
+            <div class="completions-grid">
+              {#each tabCandidates as completion, index}
+                <button
+                  type="button"
+                  class="completion-item"
+                  class:completion-item-selected={index === selectedCompletionIndex}
+                  onclick={() => selectCompletion(completion)}
+                >
+                  {completion}
+                </button>
+              {/each}
+            </div>
+            <div class="completions-hint">
+              Нажмите Tab еще раз или кликните для выбора • Esc для закрытия
+            </div>
+          </div>
+        {/if}
+      </div>
       <button type="submit" class="btn btn-primary">Enter</button>
     </form>
-    <div class="command-hint">Tab: автодополнение · ↑/↓: история команд</div>
+    <div class="command-hint">Tab: автодополнение • Двойной Tab: показать все варианты • ↑/↓: навигация по подсказкам/истории • Enter: выбрать • Esc: закрыть</div>
   </section>
 {/if}
 
@@ -353,6 +508,78 @@
     display: grid;
     grid-template-columns: 1fr auto;
     gap: 8px;
+    position: relative;
+  }
+
+  .command-input-container {
+    position: relative;
+  }
+
+  .completions-popup {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    margin-bottom: 8px;
+    max-height: 300px;
+    overflow: hidden;
+    z-index: 1000;
+  }
+
+  .completions-header {
+    padding: 8px 12px;
+    background: var(--bg-subtle);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+  }
+
+  .completions-grid {
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 4px;
+  }
+
+  .completion-item {
+    display: block;
+    width: 100%;
+    padding: 6px 12px;
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    transition: background-color 0.1s ease;
+  }
+
+  .completion-item:hover {
+    background: var(--bg-subtle);
+  }
+
+  .completion-item:active {
+    background: var(--bg-active);
+  }
+
+  .completion-item-selected {
+    background: var(--accent-bg) !important;
+    color: var(--accent) !important;
+    border: 1px solid var(--accent);
+  }
+
+  .completions-hint {
+    padding: 6px 12px;
+    background: var(--bg-subtle);
+    border-top: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--text-hint);
   }
 
   .command-hint {

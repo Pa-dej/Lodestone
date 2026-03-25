@@ -34,6 +34,10 @@ pub struct ServerConfig {
     ram_mb: u32,
     path: PathBuf,
     running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    online_players: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_players: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -897,8 +901,47 @@ async fn list_servers(state: State<'_, AppState>) -> Result<Vec<ServerConfig>, S
 
     for server in &mut servers {
         server.running = running_ids.contains(&server.id);
+        
+        // Получаем статистику для запущенных серверов
+        if server.running {
+            if let Ok((online_players, max_players)) = get_server_stats_internal(&state, &server.id).await {
+                server.online_players = online_players;
+                server.max_players = max_players;
+            }
+        } else {
+            server.online_players = None;
+            server.max_players = None;
+        }
     }
     Ok(servers)
+}
+
+// Внутренняя функция для получения статистики (без #[tauri::command])
+async fn get_server_stats_internal(
+    state: &State<'_, AppState>,
+    id: &str,
+) -> Result<(Option<u32>, Option<u32>), String> {
+    let running = {
+        let running_map = state.running.lock().await;
+        running_map.get(id).cloned()
+    };
+
+    let Some(_server) = running else {
+        return Ok((None, None));
+    };
+
+    // Тестовые данные для демонстрации
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    
+    let mut hasher = DefaultHasher::new();
+    id.hash(&mut hasher);
+    let hash = hasher.finish();
+    
+    let online_players = (hash % 5) as u32; // 0-4 игрока
+    let max_players = 20u32; // Стандартное значение
+    
+    Ok((Some(online_players), Some(max_players)))
 }
 
 #[tauri::command]
@@ -963,6 +1006,8 @@ async fn create_server(
         ram_mb: config.ram_mb,
         path: server_dir,
         running: false,
+        online_players: None,
+        max_players: None,
     };
 
     let mut servers = load_servers_from_disk().await?;
@@ -1151,6 +1196,105 @@ async fn send_command(
 }
 
 #[tauri::command]
+async fn get_server_commands(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<String>, String> {
+    let running = {
+        let running_map = state.running.lock().await;
+        running_map.get(&id).cloned()
+    };
+
+    let Some(_server) = running else {
+        // Если сервер не запущен, возвращаем базовые команды
+        return Ok(vec![
+            "help".to_string(),
+            "list".to_string(),
+            "stop".to_string(),
+            "save-all".to_string(),
+            "reload".to_string(),
+            "restart".to_string(),
+        ]);
+    };
+
+    // Для получения команд от сервера нужно отправить команду help или tab completion
+    // Пока возвращаем расширенный список базовых команд
+    // TODO: Реализовать парсинг вывода команды /help или tab completion от сервера
+    Ok(vec![
+        "help".to_string(),
+        "list".to_string(),
+        "say".to_string(),
+        "stop".to_string(),
+        "save-all".to_string(),
+        "save-on".to_string(),
+        "save-off".to_string(),
+        "reload".to_string(),
+        "restart".to_string(),
+        "time set day".to_string(),
+        "time set night".to_string(),
+        "time add".to_string(),
+        "time query".to_string(),
+        "weather clear".to_string(),
+        "weather rain".to_string(),
+        "weather thunder".to_string(),
+        "gamerule keepInventory true".to_string(),
+        "gamerule keepInventory false".to_string(),
+        "gamerule doMobSpawning true".to_string(),
+        "gamerule doMobSpawning false".to_string(),
+        "difficulty peaceful".to_string(),
+        "difficulty easy".to_string(),
+        "difficulty normal".to_string(),
+        "difficulty hard".to_string(),
+        "gamemode survival".to_string(),
+        "gamemode creative".to_string(),
+        "gamemode adventure".to_string(),
+        "gamemode spectator".to_string(),
+        "tp".to_string(),
+        "teleport".to_string(),
+        "whitelist on".to_string(),
+        "whitelist off".to_string(),
+        "whitelist add".to_string(),
+        "whitelist remove".to_string(),
+        "whitelist list".to_string(),
+        "whitelist reload".to_string(),
+        "ban".to_string(),
+        "ban-ip".to_string(),
+        "pardon".to_string(),
+        "pardon-ip".to_string(),
+        "kick".to_string(),
+        "op".to_string(),
+        "deop".to_string(),
+        "reload confirm".to_string(),
+        "seed".to_string(),
+        "give".to_string(),
+        "clear".to_string(),
+        "kill".to_string(),
+        "effect".to_string(),
+        "enchant".to_string(),
+        "experience".to_string(),
+        "xp".to_string(),
+        "fill".to_string(),
+        "setblock".to_string(),
+        "summon".to_string(),
+        "tellraw".to_string(),
+        "title".to_string(),
+        "scoreboard".to_string(),
+        "team".to_string(),
+        "worldborder".to_string(),
+        "spawnpoint".to_string(),
+        "setworldspawn".to_string(),
+    ])
+}
+
+#[tauri::command]
+async fn get_server_stats(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(Option<u32>, Option<u32>), String> {
+    get_server_stats_internal(&state, &id).await
+}
+
+#[tauri::command]
 async fn fetch_versions(core: String) -> Result<Vec<String>, String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
@@ -1285,6 +1429,8 @@ pub fn run() {
             delete_server,
             attach_console,
             send_command,
+            get_server_commands,
+            get_server_stats,
             fetch_versions,
             get_settings,
             save_settings

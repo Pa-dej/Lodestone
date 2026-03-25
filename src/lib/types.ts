@@ -9,6 +9,8 @@ export interface ServerConfig {
   ram_mb: number;
   path: string;
   running: boolean;
+  online_players?: number;
+  max_players?: number;
 }
 
 export interface NewServerConfig {
