@@ -88,8 +88,7 @@ interface StyleState {
 
 function buildStyleString(state: StyleState): string {
   const styles: string[] = [];
-  
-  // Reverse меняет местами fg и bg
+
   const fg = state.reverse ? (state.bg || "#e5e5e5") : state.fg;
   const bg = state.reverse ? (state.fg || "#000000") : state.bg;
   

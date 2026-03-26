@@ -34,8 +34,8 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 libc = "0.2"
 
 [profile.release]
-opt-level = "z"        # Оптимизация по размеру
-lto = true             # Link-time optimization
-codegen-units = 1      # Лучшая оптимизация (медленнее компиляция)
-panic = "abort"        # Меньше кода для unwinding
-strip = true           # Удалить debug символы
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

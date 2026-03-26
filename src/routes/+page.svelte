@@ -35,20 +35,26 @@
       : "",
   );
 
-  // Drag & Drop состояние
   let gridEl: HTMLElement | null = $state(null);
   let cardEls: Record<string, HTMLElement> = $state({});
   let dragging: DragState | null = $state(null);
   let lastTargetSlot = $state(-1);
-  
+
+  interface GridMetrics {
+    columns: number;
+    gap: number;
+    cardWidth: number;
+    cardHeight: number;
+  }
+
+  const GRID_GAP_FALLBACK = 12;
+  const CARD_HEIGHT = 240;
+
   const orderedServers = $derived(getOrderedServers());
-  
-  // Создаем массив порядка с null для пустых слотов (добавляем место для карточки "добавить")
+
   const order = $derived.by(() => {
-    const result: (string | null)[] = [];
-    orderedServers.forEach(s => result.push(s.id));
-    result.push(null); // Место для карточки "добавить"
-    return result;
+    const orderedIds = orderedServers.map((server) => server.id);
+    return [...orderedIds, null];
   });
 
   function openCreateModal(): void {
@@ -113,195 +119,242 @@
     closeDeleteModal();
   }
 
-  // Drag & Drop функции
-  function getCardPositionInGrid(index: number): { x: number; y: number; w: number; h: number } {
-    if (!gridEl) return { x: 0, y: 0, w: 0, h: 0 };
-    
+  function measureGridMetrics(): GridMetrics | null {
+    if (!gridEl) {
+      return null;
+    }
+
     const gridRect = gridEl.getBoundingClientRect();
     const gridStyle = window.getComputedStyle(gridEl);
-    const gap = parseFloat(gridStyle.gap) || 12;
-    
-    // Получаем количество колонок из grid-template-columns
-    const columns = gridStyle.gridTemplateColumns.split(' ').length;
-    
-    // Вычисляем размеры карточки
+    const gap = Number.parseFloat(gridStyle.gap) || GRID_GAP_FALLBACK;
+    const columns = Math.max(
+      1,
+      gridStyle.gridTemplateColumns
+        .split(" ")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0).length,
+    );
+
     const totalGapWidth = gap * (columns - 1);
     const cardWidth = (gridRect.width - totalGapWidth) / columns;
-    const cardHeight = 240; // увеличенная высота для размещения всех кнопок
-    
-    // Вычисляем позицию
-    const row = Math.floor(index / columns);
-    const col = index % columns;
-    
-    const x = col * (cardWidth + gap);
-    const y = row * (cardHeight + gap);
-    
-    return { x, y, w: cardWidth, h: cardHeight };
+
+    return {
+      columns,
+      gap,
+      cardWidth,
+      cardHeight: CARD_HEIGHT,
+    };
   }
 
-  function positionCard(cardId: string, slotIdx: number, animate: boolean): void {
+  function getCardPositionInGrid(index: number, metrics: GridMetrics): { x: number; y: number; w: number; h: number } {
+    const row = Math.floor(index / metrics.columns);
+    const col = index % metrics.columns;
+    return {
+      x: col * (metrics.cardWidth + metrics.gap),
+      y: row * (metrics.cardHeight + metrics.gap),
+      w: metrics.cardWidth,
+      h: metrics.cardHeight,
+    };
+  }
+
+  function positionCard(cardId: string, slotIdx: number, animate: boolean, metrics: GridMetrics): void {
     const el = cardEls[cardId];
-    if (!el || !gridEl) return;
-    
-    const p = getCardPositionInGrid(slotIdx);
-    el.style.transition = animate 
-      ? 'left 0.2s cubic-bezier(.4,0,.2,1), top 0.2s cubic-bezier(.4,0,.2,1)' 
-      : 'none';
-    el.style.left = p.x + 'px';
-    el.style.top = p.y + 'px';
-    el.style.width = p.w + 'px';
-    el.style.height = p.h + 'px';
+    if (!el) {
+      return;
+    }
+
+    const position = getCardPositionInGrid(slotIdx, metrics);
+    el.style.transition = animate
+      ? "left 0.2s cubic-bezier(.4,0,.2,1), top 0.2s cubic-bezier(.4,0,.2,1)"
+      : "none";
+    el.style.left = `${position.x}px`;
+    el.style.top = `${position.y}px`;
+    el.style.width = `${position.w}px`;
+    el.style.height = `${position.h}px`;
   }
 
   function layoutAll(animate: boolean): void {
+    const metrics = measureGridMetrics();
+    if (!metrics) {
+      return;
+    }
+
     order.forEach((cardId, slot) => {
       if (cardId !== null) {
-        positionCard(cardId, slot, animate);
+        positionCard(cardId, slot, animate, metrics);
       }
     });
-    
-    // Позиционируем карточку добавления в последний слот
+
     const addCardSlot = orderedServers.length;
-    if (cardEls['__add__']) {
-      positionCard('__add__', addCardSlot, animate);
+    if (cardEls["__add__"]) {
+      positionCard("__add__", addCardSlot, animate, metrics);
     }
   }
 
   function handleMouseDown(cardId: string, e: MouseEvent | TouchEvent): void {
-    if (!gridEl || !cardEls[cardId]) return;
-    
-    if (e.type === 'touchstart') {
+    if (!gridEl || !cardEls[cardId]) {
+      return;
+    }
+
+    if (e.type === "touchstart") {
       e.preventDefault();
     }
-    
-    const cx = e.type === 'touchstart' ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
-    const cy = e.type === 'touchstart' ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
-    
+
+    const cx =
+      e.type === "touchstart" ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
+    const cy =
+      e.type === "touchstart" ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
+
     const el = cardEls[cardId];
+    const startCardLeft = Number.parseFloat(el.style.left);
+    const startCardTop = Number.parseFloat(el.style.top);
     dragging = {
       cardId,
       startMouseX: cx,
       startMouseY: cy,
-      startCardLeft: parseFloat(el.style.left),
-      startCardTop: parseFloat(el.style.top),
+      startCardLeft: Number.isFinite(startCardLeft) ? startCardLeft : 0,
+      startCardTop: Number.isFinite(startCardTop) ? startCardTop : 0,
     };
-    
+
     lastTargetSlot = order.indexOf(cardId);
-    
-    el.style.transition = 'box-shadow 0.15s';
-    el.style.zIndex = '100';
-    el.style.boxShadow = '0 8px 32px rgba(0,0,0,0.22)';
-    
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    document.addEventListener('touchmove', handleMouseMove, { passive: false });
-    document.addEventListener('touchend', handleMouseUp);
+
+    el.style.transition = "box-shadow 0.15s";
+    el.style.zIndex = "100";
+    el.style.boxShadow = "0 8px 32px rgba(0,0,0,0.22)";
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    document.addEventListener("touchmove", handleMouseMove, { passive: false });
+    document.addEventListener("touchend", handleMouseUp);
   }
 
-  function findNearestSlotByPosition(mouseX: number, mouseY: number): number {
-    if (!dragging || !gridEl) return 0;
-    
+  function findNearestSlotByPosition(): number {
+    if (!dragging) {
+      return 0;
+    }
+
+    const metrics = measureGridMetrics();
+    if (!metrics) {
+      return 0;
+    }
+
     const el = cardEls[dragging.cardId];
-    if (!el) return 0;
-    
-    // Получаем текущую позицию и размер перетаскиваемой карточки
-    const cardRect = el.getBoundingClientRect();
-    const cardCenterX = cardRect.left + cardRect.width / 2;
-    const cardCenterY = cardRect.top + cardRect.height / 2;
-    
-    const gridRect = gridEl.getBoundingClientRect();
-    const relX = cardCenterX - gridRect.left;
-    const relY = cardCenterY - gridRect.top;
-    
+    if (!el) {
+      return 0;
+    }
+
+    const left = Number.parseFloat(el.style.left);
+    const top = Number.parseFloat(el.style.top);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) {
+      return Math.max(lastTargetSlot, 0);
+    }
+
+    const relX = left + metrics.cardWidth / 2;
+    const relY = top + metrics.cardHeight / 2;
+
     let bestSlot = 0;
     let bestDist = Infinity;
-    
+
     for (let i = 0; i < order.length; i++) {
-      const pos = getCardPositionInGrid(i);
+      const pos = getCardPositionInGrid(i, metrics);
       const centerX = pos.x + pos.w / 2;
       const centerY = pos.y + pos.h / 2;
       const dist = Math.hypot(relX - centerX, relY - centerY);
-      
+
       if (dist < bestDist) {
         bestDist = dist;
         bestSlot = i;
       }
     }
-    
+
     return bestSlot;
   }
 
   function handleMouseMove(e: MouseEvent | TouchEvent): void {
-    if (!dragging || !gridEl) return;
-    
+    if (!dragging || !gridEl) {
+      return;
+    }
+
     const currentDrag = dragging;
-    if (!cardEls[currentDrag.cardId]) return;
-    
-    if (e.type === 'touchmove') {
+    if (!cardEls[currentDrag.cardId]) {
+      return;
+    }
+
+    if (e.type === "touchmove") {
       e.preventDefault();
     }
-    
-    const cx = e.type === 'touchmove' ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
-    const cy = e.type === 'touchmove' ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
-    
+
+    const cx =
+      e.type === "touchmove" ? (e as TouchEvent).touches[0].clientX : (e as MouseEvent).clientX;
+    const cy =
+      e.type === "touchmove" ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
+
     const dx = cx - currentDrag.startMouseX;
     const dy = cy - currentDrag.startMouseY;
-    
+
     const el = cardEls[currentDrag.cardId];
-    el.style.transition = 'box-shadow 0.15s';
-    el.style.left = (currentDrag.startCardLeft + dx) + 'px';
-    el.style.top = (currentDrag.startCardTop + dy) + 'px';
-    
-    const target = findNearestSlotByPosition(cx, cy);
+    el.style.transition = "box-shadow 0.15s";
+    el.style.left = `${currentDrag.startCardLeft + dx}px`;
+    el.style.top = `${currentDrag.startCardTop + dy}px`;
+
+    const target = findNearestSlotByPosition();
     if (target !== lastTargetSlot) {
       lastTargetSlot = target;
       const preview = buildPreviewOrder(order, currentDrag.cardId, target);
+      const metrics = measureGridMetrics();
+      if (!metrics) {
+        return;
+      }
       preview.forEach((cid, slot) => {
         if (cid !== null && cid !== currentDrag.cardId) {
-          positionCard(cid, slot, true);
+          positionCard(cid, slot, true, metrics);
         }
       });
     }
   }
 
   function handleMouseUp(): void {
-    if (!dragging) return;
-    
+    if (!dragging) {
+      return;
+    }
+
     const draggedCardId = dragging.cardId;
-    
-    document.removeEventListener('mousemove', handleMouseMove);
-    document.removeEventListener('mouseup', handleMouseUp);
-    document.removeEventListener('touchmove', handleMouseMove);
-    document.removeEventListener('touchend', handleMouseUp);
-    
+
+    document.removeEventListener("mousemove", handleMouseMove);
+    document.removeEventListener("mouseup", handleMouseUp);
+    document.removeEventListener("touchmove", handleMouseMove);
+    document.removeEventListener("touchend", handleMouseUp);
+
     const el = cardEls[draggedCardId];
     if (el) {
-      el.style.zIndex = '';
-      el.style.boxShadow = '';
+      el.style.zIndex = "";
+      el.style.boxShadow = "";
     }
-    
+
     const newOrder = buildPreviewOrder(order, draggedCardId, lastTargetSlot);
     const serverIds = newOrder.filter((id): id is string => id !== null);
     updateServerOrder(serverIds);
-    
+
     dragging = null;
-    
-    // Перепозиционируем все карточки после обновления порядка
+
     setTimeout(() => layoutAll(true), 0);
   }
 
   onMount(() => {
     layoutAll(false);
-    
+
     const handleResize = () => layoutAll(false);
-    window.addEventListener('resize', handleResize);
-    
+    window.addEventListener("resize", handleResize);
+
     return () => {
-      window.removeEventListener('resize', handleResize);
+      window.removeEventListener("resize", handleResize);
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.removeEventListener("touchmove", handleMouseMove);
+      document.removeEventListener("touchend", handleMouseUp);
     };
   });
 
-  // Перепозиционируем карточки при изменении порядка или размера
   $effect(() => {
     if (gridEl && Object.keys(cardEls).length > 0) {
       layoutAll(false);
@@ -322,7 +375,6 @@
 
   <div class="servers-grid-wrapper">
     <div class="servers-grid" bind:this={gridEl}>
-      <!-- Карточки серверов (абсолютное позиционирование) -->
       {#each orderedServers as server (server.id)}
         <div 
           class="card-wrapper"
@@ -352,8 +404,7 @@
           />
         </div>
       {/each}
-      
-      <!-- Карточка добавления сервера -->
+
       <div 
         class="card-wrapper add-card-wrapper"
         bind:this={cardEls['__add__']}
@@ -434,7 +485,6 @@
     cursor: default;
   }
 
-  /* Убираем стандартные стили карточки, так как теперь она в wrapper */
   .card-wrapper :global(.server-card),
   .card-wrapper :global(.add-card) {
     width: 100%;

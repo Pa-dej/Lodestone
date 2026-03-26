@@ -10,16 +10,13 @@
 
   let { value, propertyKey, onChange }: Props = $props();
 
-  // Определяем тип значения на основе ключа и текущего значения
   const valueType = $derived.by(() => {
     const key = propertyKey.toLowerCase();
     const val = value.toLowerCase().trim();
 
-    // Enum свойства
     if (key === "gamemode") return "gamemode";
     if (key === "difficulty") return "difficulty";
 
-    // Boolean свойства
     if (
       val === "true" ||
       val === "false" ||
@@ -43,7 +40,6 @@
       return "boolean";
     }
 
-    // Числовые свойства
     if (
       key.includes("port") ||
       key.includes("max-") ||
@@ -103,7 +99,6 @@
     onChange(input.value);
   }
 
-  // Определяем диапазон для числовых значений
   const numberConstraints = $derived.by(() => {
     const key = propertyKey.toLowerCase();
     if (key.includes("port")) return { min: 1, max: 65535 };

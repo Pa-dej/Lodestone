@@ -11,6 +11,20 @@
   let bootError = $state<string | null>(null);
   let initialized = $state(false);
   let appStartTime = Date.now();
+  const LOADER_MIN_DURATION_MS = 800;
+
+  function hideBootstrapLoader(): void {
+    const loader = document.getElementById("app-loader");
+    if (!loader) {
+      return;
+    }
+
+    const elapsed = Date.now() - appStartTime;
+    const remaining = Math.max(0, LOADER_MIN_DURATION_MS - elapsed);
+    setTimeout(() => {
+      loader.classList.add("loaded");
+    }, remaining);
+  }
 
   async function initializeApp(): Promise<void> {
     try {
@@ -26,32 +40,10 @@
       }
       startPollingServers();
       initialized = true;
-      
-      // Скрываем лоадер после инициализации с учетом минимального времени
-      const loader = document.getElementById('app-loader');
-      if (loader) {
-        const elapsed = Date.now() - appStartTime;
-        const minLoadTime = 800;
-        const remaining = Math.max(0, minLoadTime - elapsed);
-        
-        setTimeout(() => {
-          loader.classList.add('loaded');
-        }, remaining);
-      }
     } catch (error) {
       bootError = error instanceof Error ? error.message : String(error);
-      
-      // Скрываем лоадер даже при ошибке
-      const loader = document.getElementById('app-loader');
-      if (loader) {
-        const elapsed = Date.now() - appStartTime;
-        const minLoadTime = 800;
-        const remaining = Math.max(0, minLoadTime - elapsed);
-        
-        setTimeout(() => {
-          loader.classList.add('loaded');
-        }, remaining);
-      }
+    } finally {
+      hideBootstrapLoader();
     }
   }
 

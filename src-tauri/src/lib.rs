@@ -38,9 +38,9 @@ const CONSOLE_BATCH_EVENT: &str = "console_batch";
 const DOWNLOAD_PROGRESS_EVENT: &str = "download_progress";
 const VERSION_CACHE_TTL_SECS: u64 = 300;
 const MAX_CONSOLE_LINES: usize = 50;
-const CONSOLE_CHANNEL_SIZE: usize = 64; // Уменьшен для экономии памяти (было 1024)
-const BATCH_SIZE: usize = 8; // Очень маленький батч для мгновенного отклика
-const BATCH_INTERVAL_MS: u64 = 8; // Очень быстрый flush (8ms)
+const CONSOLE_CHANNEL_SIZE: usize = 64;
+const BATCH_SIZE: usize = 8;
+const BATCH_INTERVAL_MS: u64 = 8;
 const BASE_SERVER_COMMANDS: &[&str] = &[
     "help",
     "list",
@@ -123,10 +123,10 @@ const EXTENDED_SERVER_COMMANDS: &[&str] = &[
     "plugman check",
 ];
 
-static VERSIONS_CACHE: OnceLock<SyncRwLock<HashMap<String, (Instant, Vec<String>)>>> =
-    OnceLock::new();
+type VersionsCache = HashMap<String, (Instant, Vec<String>)>;
 
-// Event-driven архитектура: события консоли
+static VERSIONS_CACHE: OnceLock<SyncRwLock<VersionsCache>> = OnceLock::new();
+
 #[derive(Debug, Clone)]
 enum ConsoleEvent {
     Line {
@@ -262,15 +262,15 @@ struct RunningServer {
     pty_master: Arc<crate::pty::PtyMaster>,
     #[cfg(not(unix))]
     stdin: Arc<AsyncMutex<ChildStdin>>,
-    #[allow(dead_code)] // Хранится для поддержания канала открытым
-    console_tx: mpsc::Sender<ConsoleEvent>, // Event streaming вместо shared state
-    recent_lines: Arc<SyncRwLock<VecDeque<Arc<str>>>>, // Arc<str> для zero-cost clone
+    #[allow(dead_code)]
+    console_tx: mpsc::Sender<ConsoleEvent>,
+    recent_lines: Arc<SyncRwLock<VecDeque<Arc<str>>>>,
 }
 
 #[derive(Clone, Default)]
 struct AppState {
     running: Arc<AsyncMutex<HashMap<String, RunningServer>>>,
-    servers_cache: Arc<SyncRwLock<Option<Vec<ServerConfig>>>>, // Кэш серверов в памяти
+    servers_cache: Arc<SyncRwLock<Option<Vec<ServerConfig>>>>,
     tracked_server_pids: Arc<SyncRwLock<HashMap<String, u32>>>,
 }
 
@@ -358,33 +358,32 @@ async fn load_servers_from_disk() -> Result<Vec<ServerConfig>, String> {
         .map_err(|err| format!("Failed to parse servers.json: {err}"))
 }
 
-// Загрузка серверов с кэшированием
 async fn load_servers_cached(state: &AppState) -> Result<Vec<ServerConfig>, String> {
-    // Проверяем кэш
     {
         let cache = state.servers_cache.read();
         if let Some(ref servers) = *cache {
             return Ok(servers.clone());
         }
     }
-    
-    // Загружаем с диска и кэшируем
+
     let servers = load_servers_from_disk().await?;
     {
         let mut cache = state.servers_cache.write();
         *cache = Some(servers.clone());
     }
-    
+
     Ok(servers)
 }
 
-// Инвалидация кэша при изменении
 fn invalidate_servers_cache(state: &AppState) {
     let mut cache = state.servers_cache.write();
     *cache = None;
 }
 
-async fn save_servers_to_disk(servers: &[ServerConfig], state: Option<&AppState>) -> Result<(), String> {
+async fn save_servers_to_disk(
+    servers: &[ServerConfig],
+    state: Option<&AppState>,
+) -> Result<(), String> {
     ensure_app_dirs().await?;
     let file_path = servers_file_path()?;
     let body = serde_json::to_vec_pretty(servers)
@@ -392,16 +391,19 @@ async fn save_servers_to_disk(servers: &[ServerConfig], state: Option<&AppState>
     tokio_fs::write(&file_path, body)
         .await
         .map_err(|err| format!("Failed to write servers.json: {err}"))?;
-    
-    // Инвалидируем кэш после сохранения
+
     if let Some(state) = state {
         invalidate_servers_cache(state);
     }
-    
+
     Ok(())
 }
 
-async fn set_server_running_flag(state: &AppState, server_id: &str, running: bool) -> Result<(), String> {
+async fn set_server_running_flag(
+    state: &AppState,
+    server_id: &str,
+    running: bool,
+) -> Result<(), String> {
     let mut servers = load_servers_cached(state).await?;
     for server in &mut servers {
         if server.id == server_id {
@@ -498,7 +500,9 @@ fn terminate_process_by_pid(pid: u32) -> Result<(), String> {
     if status.success() {
         Ok(())
     } else {
-        Err(format!("taskkill failed for PID {pid} with status {status}"))
+        Err(format!(
+            "taskkill failed for PID {pid} with status {status}"
+        ))
     }
 }
 
@@ -577,25 +581,7 @@ fn emit_console_line(app_handle: &AppHandle, server_id: &str, line: &str) {
     let _ = app_handle.emit(CONSOLE_EVENT, payload);
 }
 
-fn emit_download_progress(
-    app_handle: &AppHandle,
-    server_id: &str,
-    filename: &str,
-    downloaded_bytes: u64,
-    total_bytes: u64,
-    percent: f64,
-    speed_mbps: f64,
-    done: bool,
-) {
-    let payload = DownloadProgressPayload {
-        server_id: server_id.to_string(),
-        filename: filename.to_string(),
-        downloaded_bytes,
-        total_bytes,
-        percent,
-        speed_mbps,
-        done,
-    };
+fn emit_download_progress(app_handle: &AppHandle, payload: DownloadProgressPayload) {
     let _ = app_handle.emit(DOWNLOAD_PROGRESS_EVENT, payload);
 }
 
@@ -678,7 +664,9 @@ fn compare_minecraft_versions(left: &str, right: &str) -> Ordering {
                 let right_is_num = right_chunk.chars().all(|ch| ch.is_ascii_digit());
 
                 let order = match (left_is_num, right_is_num) {
-                    (true, true) => compare_numeric_chunks(left_chunk.as_ref(), right_chunk.as_ref()),
+                    (true, true) => {
+                        compare_numeric_chunks(left_chunk.as_ref(), right_chunk.as_ref())
+                    }
                     (false, false) => left_chunk.cmp(right_chunk),
                     (true, false) => Ordering::Greater,
                     (false, true) => Ordering::Less,
@@ -855,14 +843,13 @@ async fn download_to_path(
     let file_name = destination
         .file_name()
         .and_then(OsStr::to_str)
-        .unwrap_or_else(|| "server.jar");
+        .unwrap_or("server.jar");
 
     let mut stream = response.bytes_stream();
     let file = tokio_fs::File::create(destination)
         .await
         .map_err(|err| format!("Failed to create file {}: {err}", destination.display()))?;
-    
-    // Используем буферизованную запись для уменьшения syscalls
+
     let std_file = file.into_std().await;
     let mut buffered_file = BufWriter::with_capacity(64 * 1024, std_file);
 
@@ -886,13 +873,15 @@ async fn download_to_path(
 
         emit_download_progress(
             app_handle,
-            server_id,
-            file_name,
-            downloaded_bytes,
-            total_bytes,
-            percent,
-            speed_mbps,
-            false,
+            DownloadProgressPayload {
+                server_id: server_id.to_string(),
+                filename: file_name.to_string(),
+                downloaded_bytes,
+                total_bytes,
+                percent,
+                speed_mbps,
+                done: false,
+            },
         );
     }
 
@@ -1188,7 +1177,7 @@ fn generate_server_directory_name(name: &str, core: &str, version: &str) -> Stri
     let safe_name = sanitize_directory_name(name);
     let safe_core = sanitize_directory_name(core);
     let safe_version = sanitize_directory_name(version);
-    
+
     format!("{}-{}-{}", safe_name, safe_core, safe_version)
 }
 
@@ -1228,11 +1217,7 @@ fn stringify_server_properties(entries: &[ServerPropertyEntry]) -> String {
     body
 }
 
-async fn upsert_server_property(
-    server_path: &Path,
-    key: &str,
-    value: &str,
-) -> Result<(), String> {
+async fn upsert_server_property(server_path: &Path, key: &str, value: &str) -> Result<(), String> {
     let normalized_key = sanitized_property_key(key);
     if normalized_key.is_empty() {
         return Ok(());
@@ -1241,12 +1226,14 @@ async fn upsert_server_property(
     let normalized_value = sanitized_property_value(value);
     let properties_path = server_path.join("server.properties");
     let mut entries = if properties_path.exists() {
-        let content = tokio_fs::read_to_string(&properties_path).await.map_err(|err| {
-            format!(
-                "Failed to read server properties {}: {err}",
-                properties_path.display()
-            )
-        })?;
+        let content = tokio_fs::read_to_string(&properties_path)
+            .await
+            .map_err(|err| {
+                format!(
+                    "Failed to read server properties {}: {err}",
+                    properties_path.display()
+                )
+            })?;
         parse_server_properties(&content)
     } else {
         Vec::new()
@@ -1267,12 +1254,14 @@ async fn upsert_server_property(
 
     entries.sort_by(|a, b| a.key.cmp(&b.key));
     let body = stringify_server_properties(&entries);
-    tokio_fs::write(&properties_path, body).await.map_err(|err| {
-        format!(
-            "Failed to write server properties {}: {err}",
-            properties_path.display()
-        )
-    })?;
+    tokio_fs::write(&properties_path, body)
+        .await
+        .map_err(|err| {
+            format!(
+                "Failed to write server properties {}: {err}",
+                properties_path.display()
+            )
+        })?;
 
     Ok(())
 }
@@ -1296,12 +1285,14 @@ async fn place_generated_server_jar(
     }
 
     if server_jar_path.exists() {
-        tokio_fs::remove_file(server_jar_path).await.map_err(|err| {
-            format!(
-                "Failed to replace existing server.jar at {}: {err}",
-                server_jar_path.display()
-            )
-        })?;
+        tokio_fs::remove_file(server_jar_path)
+            .await
+            .map_err(|err| {
+                format!(
+                    "Failed to replace existing server.jar at {}: {err}",
+                    server_jar_path.display()
+                )
+            })?;
     }
 
     match tokio_fs::rename(generated_jar, server_jar_path).await {
@@ -1500,13 +1491,15 @@ async fn install_core_jar(
 
             emit_download_progress(
                 app_handle,
-                server_id,
-                "fabric-installer",
-                0,
-                0,
-                95.0,
-                0.0,
-                false,
+                DownloadProgressPayload {
+                    server_id: server_id.to_string(),
+                    filename: String::from("fabric-installer"),
+                    downloaded_bytes: 0,
+                    total_bytes: 0,
+                    percent: 95.0,
+                    speed_mbps: 0.0,
+                    done: false,
+                },
             );
 
             let installer_file_name = installer_path
@@ -1547,13 +1540,15 @@ async fn install_core_jar(
 
             emit_download_progress(
                 app_handle,
-                server_id,
-                "quilt-installer",
-                0,
-                0,
-                95.0,
-                0.0,
-                false,
+                DownloadProgressPayload {
+                    server_id: server_id.to_string(),
+                    filename: String::from("quilt-installer"),
+                    downloaded_bytes: 0,
+                    total_bytes: 0,
+                    percent: 95.0,
+                    speed_mbps: 0.0,
+                    done: false,
+                },
             );
 
             let installer_file_name = installer_path
@@ -1600,13 +1595,15 @@ async fn install_core_jar(
 
             emit_download_progress(
                 app_handle,
-                server_id,
-                "forge-installer",
-                0,
-                0,
-                95.0,
-                0.0,
-                false,
+                DownloadProgressPayload {
+                    server_id: server_id.to_string(),
+                    filename: String::from("forge-installer"),
+                    downloaded_bytes: 0,
+                    total_bytes: 0,
+                    percent: 95.0,
+                    speed_mbps: 0.0,
+                    done: false,
+                },
             );
 
             let installer_file_name = installer_path
@@ -1637,47 +1634,34 @@ async fn install_core_jar(
     Ok(())
 }
 
-fn spawn_console_reader<R>(
-    server_id: Arc<str>,
-    reader: R,
-    console_tx: mpsc::Sender<ConsoleEvent>,
-)
+fn spawn_console_reader<R>(server_id: Arc<str>, reader: R, console_tx: mpsc::Sender<ConsoleEvent>)
 where
     R: AsyncRead + Send + Unpin + 'static,
 {
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(raw_line)) = lines.next_line().await {
-            // Сохраняем ANSI коды, только убираем префиксы
             let cleaned = strip_log_prefix(&raw_line);
             let line: Arc<str> = cleaned.into();
-            
+
             let timestamp = now_timestamp_secs();
-            
+
             let event = ConsoleEvent::Line {
                 server_id: server_id.clone(),
                 line,
                 timestamp,
             };
-            
+
             if console_tx.send(event).await.is_err() {
                 break;
             }
         }
     });
 }
-/// Убирает префиксы типа "[14:58:41][Console/INFO]>" из строки лога
-/// Убирает префиксы типа "[14:58:41][Console/INFO]>" из строки лога
-/// Сохраняет ANSI escape-коды в сообщении
 fn strip_log_prefix(line: &str) -> &str {
-    // Ищем паттерн: [время][категория/уровень]> или [время] [категория/уровень]:
-    // Примеры: "[14:58:41][Console/INFO]>", "[14:58:41] [Server thread/INFO]:"
-    // Также обрабатываем ANSI коды внутри префиксов
-
     let bytes = line.as_bytes();
     let mut pos = 0;
 
-    // Пропускаем ANSI escape-коды в начале
     while pos < bytes.len() && bytes[pos] == 0x1b {
         pos += 1;
         if pos < bytes.len() && bytes[pos] == b'[' {
@@ -1686,23 +1670,21 @@ fn strip_log_prefix(line: &str) -> &str {
                 pos += 1;
             }
             if pos < bytes.len() {
-                pos += 1; // пропускаем 'm'
+                pos += 1;
             }
         }
     }
 
-    // Пропускаем первый блок [...]
     if bytes.get(pos) == Some(&b'[') {
         pos += 1;
         while pos < bytes.len() && bytes[pos] != b']' {
             pos += 1;
         }
         if pos < bytes.len() {
-            pos += 1; // пропускаем ]
+            pos += 1;
         }
     }
 
-    // Пропускаем пробелы и ANSI коды между блоками
     loop {
         if pos >= bytes.len() {
             break;
@@ -1722,23 +1704,20 @@ fn strip_log_prefix(line: &str) -> &str {
         }
     }
 
-    // Пропускаем второй блок [...]
     if bytes.get(pos) == Some(&b'[') {
         pos += 1;
         while pos < bytes.len() && bytes[pos] != b']' {
             pos += 1;
         }
         if pos < bytes.len() {
-            pos += 1; // пропускаем ]
+            pos += 1;
         }
     }
 
-    // Пропускаем : или > и пробелы после
     while pos < bytes.len() && (bytes[pos] == b':' || bytes[pos] == b'>' || bytes[pos] == b' ') {
         pos += 1;
     }
 
-    // Пропускаем ANSI коды после префикса
     while pos < bytes.len() && bytes[pos] == 0x1b {
         pos += 1;
         if pos < bytes.len() && bytes[pos] == b'[' {
@@ -1766,9 +1745,8 @@ fn spawn_pty_reader(
     tx: mpsc::Sender<ConsoleEvent>,
 ) {
     tokio::spawn(async move {
-        // Стековый буфер — никаких heap-аллокаций на горячем пути
         let mut raw_buf = [0u8; 4096];
-        // Буфер для накопления неполных строк
+
         let mut line_buf: Vec<u8> = Vec::with_capacity(256);
 
         loop {
@@ -1779,15 +1757,12 @@ fn spawn_pty_reader(
 
             let chunk = &raw_buf[..n];
 
-            // Разбиваем по \n без лишних аллокаций
             for &byte in chunk {
                 if byte == b'\n' {
-                    // strip \r если есть
                     if line_buf.last() == Some(&b'\r') {
                         line_buf.pop();
                     }
 
-                    // Сохраняем ANSI коды, только убираем префиксы
                     let raw_line = String::from_utf8_lossy(&line_buf);
                     let cleaned = strip_log_prefix(&raw_line);
                     let line: Arc<str> = cleaned.into();
@@ -1802,7 +1777,6 @@ fn spawn_pty_reader(
                         return;
                     }
 
-                    // Очищаем буфер строки (reuse аллокации)
                     line_buf.clear();
                 } else {
                     line_buf.push(byte);
@@ -1812,8 +1786,6 @@ fn spawn_pty_reader(
     });
 }
 
-
-// Event processor: единственный владелец cache, обрабатывает события с batching
 fn spawn_console_processor(
     app_handle: AppHandle,
     server_id: String,
@@ -1821,54 +1793,50 @@ fn spawn_console_processor(
     recent_lines: Arc<SyncRwLock<VecDeque<Arc<str>>>>,
 ) {
     tokio::spawn(async move {
-        // Буфер для batching
         let mut buffer: Vec<(Arc<str>, u64)> = Vec::with_capacity(BATCH_SIZE);
-        
-        // Таймер для периодического flush (очень быстрый для мгновенного отклика)
+
         let mut interval = tokio::time::interval(Duration::from_millis(BATCH_INTERVAL_MS));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        
+
         loop {
             tokio::select! {
-                // Получаем события из канала
+
                 Some(event) = console_rx.recv() => {
                     match event {
                         ConsoleEvent::Line { server_id: event_server_id, line, timestamp } => {
-                            // Фильтруем только события этого сервера
+
                             if event_server_id.as_ref() != server_id {
                                 continue;
                             }
-                            
+
                             buffer.push((line, timestamp));
-                            
-                            // Flush если буфер заполнен (маленький размер для быстрого отклика)
+
+
                             if buffer.len() >= BATCH_SIZE {
                                 flush_console_batch(&app_handle, &server_id, &mut buffer, &recent_lines);
                             }
                         }
                     }
                 }
-                
-                // Периодический flush по таймеру (очень быстрый)
+
+
                 _ = interval.tick() => {
                     if !buffer.is_empty() {
                         flush_console_batch(&app_handle, &server_id, &mut buffer, &recent_lines);
                     }
                 }
-                
-                // Канал закрыт
+
+
                 else => break,
             }
         }
-        
-        // Финальный flush при завершении
+
         if !buffer.is_empty() {
             flush_console_batch(&app_handle, &server_id, &mut buffer, &recent_lines);
         }
     });
 }
 
-// Flush батча строк в UI и cache
 fn flush_console_batch(
     app_handle: &AppHandle,
     server_id: &str,
@@ -1878,8 +1846,7 @@ fn flush_console_batch(
     if buffer.is_empty() {
         return;
     }
-    
-    // Обновляем shared cache (минимальный lock scope)
+
     {
         let mut cache = recent_lines.write();
         for (line, _) in buffer.iter() {
@@ -1889,20 +1856,18 @@ fn flush_console_batch(
             cache.push_back(line.clone());
         }
     }
-    
-    // Отправляем батч в UI одним событием
+
     let lines: Vec<String> = buffer.iter().map(|(line, _)| line.to_string()).collect();
     let timestamps: Vec<u64> = buffer.iter().map(|(_, ts)| *ts).collect();
-    
+
     let payload = ConsoleBatchPayload {
         server_id: server_id.to_string(),
         lines,
         timestamps,
     };
-    
+
     let _ = app_handle.emit(CONSOLE_BATCH_EVENT, payload);
-    
-    // Очищаем буфер (reuse capacity)
+
     buffer.clear();
 }
 
@@ -1955,10 +1920,7 @@ fn running_ids(map: &HashMap<String, RunningServer>) -> HashSet<String> {
 
 #[tauri::command]
 async fn list_servers(state: State<'_, AppState>) -> Result<Vec<ServerConfig>, String> {
-    let mut servers = match load_servers_cached(&state).await {
-        Ok(items) => items,
-        Err(_) => Vec::new(),
-    };
+    let mut servers: Vec<ServerConfig> = load_servers_cached(&state).await.unwrap_or_default();
 
     let running_ids = {
         let running = state.running.lock().await;
@@ -1967,10 +1929,11 @@ async fn list_servers(state: State<'_, AppState>) -> Result<Vec<ServerConfig>, S
 
     for server in &mut servers {
         server.running = running_ids.contains(&server.id);
-        
-        // Получаем статистику для запущенных серверов
+
         if server.running {
-            if let Ok((online_players, max_players)) = get_server_stats_internal(&state, &server.id).await {
+            if let Ok((online_players, max_players)) =
+                get_server_stats_internal(&state, &server.id).await
+            {
                 server.online_players = online_players;
                 server.max_players = max_players;
             }
@@ -1982,7 +1945,6 @@ async fn list_servers(state: State<'_, AppState>) -> Result<Vec<ServerConfig>, S
     Ok(servers)
 }
 
-// Внутренняя функция для получения статистики (без #[tauri::command])
 async fn get_server_stats_internal(
     state: &State<'_, AppState>,
     id: &str,
@@ -1996,35 +1958,19 @@ async fn get_server_stats_internal(
         return Ok((None, None));
     };
 
-    // Получаем max_players из server.properties
-    let max_players = get_max_players_from_properties(state.inner(), id).await.unwrap_or(20);
+    let max_players = get_max_players_from_properties(state.inner(), id)
+        .await
+        .unwrap_or(20);
 
-    // Получаем количество игроков из консоли (не отправляя команды)
     match get_online_players_count(&server, id) {
-        Ok(online_count) => {
-            // Всегда возвращаем данные, даже если игроков 0
-            // UI сам решит показывать ли блок статистики
-            Ok((Some(online_count), Some(max_players)))
-        }
-        Err(_) => {
-            // В случае ошибки парсинга не показываем статистику
-            Ok((None, None))
-        }
+        Ok(online_count) => Ok((Some(online_count), Some(max_players))),
+        Err(_) => Ok((None, None)),
     }
 }
 
-// Функция для получения количества онлайн игроков
-fn get_online_players_count(
-    server: &RunningServer,
-    _server_id: &str,
-) -> Result<u32, String> {
-    // НЕ отправляем команду list - парсим только существующие строки консоли
-    // Команда list уже отправляется сервером автоматически или пользователем
-    
-    // Парсим последние строки консоли для поиска ответа на команду list
+fn get_online_players_count(server: &RunningServer, _server_id: &str) -> Result<u32, String> {
     let recent_lines = server.recent_lines.read();
-    
-    // Ищем в последних 20 строках любые упоминания количества игроков
+
     let start_idx = recent_lines.len().saturating_sub(20);
     for line in recent_lines.iter().skip(start_idx).rev() {
         if let Some(count) = parse_player_count_from_line(line) {
@@ -2032,45 +1978,25 @@ fn get_online_players_count(
         }
     }
 
-    // Если не нашли информацию о игроках, возвращаем 0
     Ok(0)
 }
 
-// Функция для парсинга количества игроков из строки консоли
 fn parse_player_count_from_line(line: &str) -> Option<u32> {
-    // Основной паттерн: "There are X of a max of Y players online"
-    // Пример: "[19:31:23 INFO]: There are 0 of a max of 20 players online:"
-    if line.contains("there are") || line.contains("There are") {
-        if line.contains("of a max of") && line.contains("players online") {
-            // Ищем числа без создания Vec - итерируем напрямую
-            let mut found_are = false;
-            for word in line.split_whitespace() {
-                if found_are {
-                    if let Ok(count) = word.parse::<u32>() {
-                        return Some(count);
-                    }
-                }
-                if word.eq_ignore_ascii_case("are") {
-                    found_are = true;
+    if line.contains("players online") && (line.contains("there are") || line.contains("There are"))
+    {
+        let mut found_are = false;
+        for word in line.split_whitespace() {
+            if found_are {
+                if let Ok(count) = word.parse::<u32>() {
+                    return Some(count);
                 }
             }
-        } else if line.contains("players online") {
-            // Альтернативный паттерн: "There are X players online"
-            let mut found_are = false;
-            for word in line.split_whitespace() {
-                if found_are {
-                    if let Ok(count) = word.parse::<u32>() {
-                        return Some(count);
-                    }
-                }
-                if word.eq_ignore_ascii_case("are") {
-                    found_are = true;
-                }
+            if word.eq_ignore_ascii_case("are") {
+                found_are = true;
             }
         }
     }
-    
-    // Паттерн для списка игроков: "Online players (X): Player1, Player2"
+
     if line.contains("online players") || line.contains("Online players") {
         if let Some(start) = line.find('(') {
             if let Some(end) = line.find(')') {
@@ -2083,11 +2009,10 @@ fn parse_player_count_from_line(line: &str) -> Option<u32> {
             }
         }
     }
-    
+
     None
 }
 
-// Функция для получения max-players из server.properties
 async fn get_max_players_from_properties(state: &AppState, server_id: &str) -> Result<u32, String> {
     let servers = load_servers_cached(state).await?;
     let server = servers
@@ -2096,16 +2021,15 @@ async fn get_max_players_from_properties(state: &AppState, server_id: &str) -> R
         .ok_or("Server not found")?;
 
     let properties_path = server.path.join("server.properties");
-    
+
     if !properties_path.exists() {
-        return Ok(20); // Значение по умолчанию
+        return Ok(20);
     }
 
     let content = tokio_fs::read_to_string(&properties_path)
         .await
         .map_err(|e| format!("Failed to read server.properties: {}", e))?;
 
-    // Парсим max-players из server.properties
     for line in content.lines() {
         if line.starts_with("max-players=") {
             if let Some(value_str) = line.split('=').nth(1) {
@@ -2116,7 +2040,7 @@ async fn get_max_players_from_properties(state: &AppState, server_id: &str) -> R
         }
     }
 
-    Ok(20) // Значение по умолчанию
+    Ok(20)
 }
 
 #[tauri::command]
@@ -2151,8 +2075,7 @@ async fn create_server(
     let server_name = server_name_or_default(&config.name);
     let dir_name = generate_server_directory_name(&server_name, &core, version);
     let server_dir = servers_root_dir()?.join(&dir_name);
-    
-    // Если директория уже существует, добавляем суффикс
+
     let server_dir = if server_dir.exists() {
         let mut counter = 1;
         loop {
@@ -2168,7 +2091,7 @@ async fn create_server(
     } else {
         server_dir
     };
-    
+
     tokio_fs::create_dir_all(&server_dir).await.map_err(|err| {
         format!(
             "Failed to create server directory {}: {err}",
@@ -2222,7 +2145,18 @@ async fn create_server(
     servers.push(server.clone());
     save_servers_to_disk(&servers, Some(&state)).await?;
 
-    emit_download_progress(&app_handle, &id, "server.jar", 1, 1, 100.0, 0.0, true);
+    emit_download_progress(
+        &app_handle,
+        DownloadProgressPayload {
+            server_id: id.clone(),
+            filename: String::from("server.jar"),
+            downloaded_bytes: 1,
+            total_bytes: 1,
+            percent: 100.0,
+            speed_mbps: 0.0,
+            done: true,
+        },
+    );
 
     Ok(server)
 }
@@ -2248,11 +2182,7 @@ async fn start_server(
 
     if let Err(port_error) = ensure_server_port_available(server.port) {
         let error_msg = format!("[SYSTEM/ERROR] {port_error}");
-        emit_console_line(
-            &app_handle,
-            &server.id,
-            &error_msg,
-        );
+        emit_console_line(&app_handle, &server.id, &error_msg);
         return Err(port_error);
     }
 
@@ -2271,7 +2201,6 @@ async fn start_server(
 
     #[cfg(not(unix))]
     {
-        // Windows: используем jline флаги как fallback
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -2291,8 +2220,8 @@ async fn start_server(
     command.arg("-jar").arg(launch_jar).arg("nogui");
 
     #[cfg(unix)]
-    let (pty_master, slave_fd) = crate::pty::PtyMaster::open()
-        .map_err(|e| format!("Failed to open PTY: {e}"))?;
+    let (pty_master, slave_fd) =
+        crate::pty::PtyMaster::open().map_err(|e| format!("Failed to open PTY: {e}"))?;
 
     #[cfg(unix)]
     {
@@ -2300,10 +2229,8 @@ async fn start_server(
         use std::os::unix::process::CommandExt;
         let slave_raw = slave_fd.into_raw_fd();
 
-        // Передаём slave как stdin/stdout/stderr — процесс видит TTY
         unsafe {
             command.pre_exec(move || {
-                // Делаем slave основным терминалом процесса
                 if libc::setsid() < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -2350,12 +2277,11 @@ async fn start_server(
     if let Some(pid) = child_pid {
         remember_server_pid(state.inner(), &server.id, pid);
     }
-    
-    // Создаём event streaming канал для консоли
+
     let (console_tx, console_rx) = mpsc::channel::<ConsoleEvent>(CONSOLE_CHANNEL_SIZE);
-    
+
     let recent_lines = Arc::new(SyncRwLock::new(VecDeque::with_capacity(MAX_CONSOLE_LINES)));
-    
+
     let running_server = RunningServer {
         #[cfg(unix)]
         pty_master: pty_master.clone(),
@@ -2373,20 +2299,27 @@ async fn start_server(
     let _ = set_server_running_flag(&state, &server.id, true).await;
 
     let server_id_arc: Arc<str> = server.id.clone().into();
-    
-    // Запускаем readers
+
     #[cfg(unix)]
-    spawn_pty_reader(server_id_arc.clone(), pty_master.clone(), console_tx.clone());
-    
+    spawn_pty_reader(
+        server_id_arc.clone(),
+        pty_master.clone(),
+        console_tx.clone(),
+    );
+
     #[cfg(not(unix))]
     {
         spawn_console_reader(server_id_arc.clone(), stdout, console_tx.clone());
         spawn_console_reader(server_id_arc.clone(), stderr, console_tx);
     }
-    
-    // Запускаем processor (consumer) - единственный владелец cache
-    spawn_console_processor(app_handle.clone(), server.id.clone(), console_rx, recent_lines);
-    
+
+    spawn_console_processor(
+        app_handle.clone(),
+        server.id.clone(),
+        console_rx,
+        recent_lines,
+    );
+
     spawn_process_watcher(
         app_handle.clone(),
         state.inner().clone(),
@@ -2506,7 +2439,10 @@ async fn open_server_folder(state: State<'_, AppState>, id: String) -> Result<()
         .ok_or_else(|| String::from("Server not found"))?;
 
     if !server.path.exists() {
-        return Err(format!("Server folder does not exist: {}", server.path.display()));
+        return Err(format!(
+            "Server folder does not exist: {}",
+            server.path.display()
+        ));
     }
 
     #[cfg(target_os = "windows")]
@@ -2530,15 +2466,21 @@ async fn open_server_folder(state: State<'_, AppState>, id: String) -> Result<()
         cmd
     };
 
-    command
-        .spawn()
-        .map_err(|err| format!("Failed to open server folder {}: {err}", server.path.display()))?;
+    command.spawn().map_err(|err| {
+        format!(
+            "Failed to open server folder {}: {err}",
+            server.path.display()
+        )
+    })?;
 
     Ok(())
 }
 
 #[tauri::command]
-async fn get_server_properties(state: State<'_, AppState>, id: String) -> Result<Vec<ServerPropertyEntry>, String> {
+async fn get_server_properties(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<ServerPropertyEntry>, String> {
     let server = load_servers_cached(&state)
         .await?
         .into_iter()
@@ -2550,12 +2492,14 @@ async fn get_server_properties(state: State<'_, AppState>, id: String) -> Result
         return Ok(Vec::new());
     }
 
-    let content = tokio_fs::read_to_string(&properties_path).await.map_err(|err| {
-        format!(
-            "Failed to read server properties {}: {err}",
-            properties_path.display()
-        )
-    })?;
+    let content = tokio_fs::read_to_string(&properties_path)
+        .await
+        .map_err(|err| {
+            format!(
+                "Failed to read server properties {}: {err}",
+                properties_path.display()
+            )
+        })?;
 
     Ok(parse_server_properties(&content))
 }
@@ -2594,12 +2538,14 @@ async fn save_server_properties(
 
     let properties_path = server.path.join("server.properties");
     let body = stringify_server_properties(&normalized);
-    tokio_fs::write(&properties_path, body).await.map_err(|err| {
-        format!(
-            "Failed to write server properties {}: {err}",
-            properties_path.display()
-        )
-    })?;
+    tokio_fs::write(&properties_path, body)
+        .await
+        .map_err(|err| {
+            format!(
+                "Failed to write server properties {}: {err}",
+                properties_path.display()
+            )
+        })?;
 
     if let Some(server_port) = normalized.iter().find(|entry| entry.key == "server-port") {
         if let Ok(parsed_port) = server_port.value.parse::<u16>() {
@@ -2892,9 +2838,10 @@ async fn get_server_commands(
         .ok_or_else(|| String::from("Server not found"))?;
 
     let server_path = server.path.clone();
-    let plugin_commands = tokio::task::spawn_blocking(move || collect_plugin_commands(&server_path))
-        .await
-        .unwrap_or_default();
+    let plugin_commands =
+        tokio::task::spawn_blocking(move || collect_plugin_commands(&server_path))
+            .await
+            .unwrap_or_default();
 
     Ok(build_server_commands(running.is_some(), plugin_commands))
 }
@@ -2961,38 +2908,36 @@ async fn fetch_versions(core: String) -> Result<Vec<String>, String> {
                 .map(String::from)
                 .collect::<Vec<_>>()
         }
-        "fabric" => {
-            match fetch_json(&client, "https://meta.fabricmc.net/v2/versions/game").await {
-                Ok(json) => json
-                    .as_array()
-                    .ok_or_else(|| String::from("Invalid Fabric versions response"))?
+        "fabric" => match fetch_json(&client, "https://meta.fabricmc.net/v2/versions/game").await {
+            Ok(json) => json
+                .as_array()
+                .ok_or_else(|| String::from("Invalid Fabric versions response"))?
+                .iter()
+                .filter_map(|entry| entry.get("version").and_then(Value::as_str))
+                .map(String::from)
+                .collect::<Vec<_>>(),
+            Err(_) => {
+                let manifest = fetch_json(
+                    &client,
+                    "https://launchermeta.mojang.com/mc/game/version_manifest.json",
+                )
+                .await?;
+                manifest
+                    .get("versions")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| String::from("Invalid fallback Fabric versions response"))?
                     .iter()
-                    .filter_map(|entry| entry.get("version").and_then(Value::as_str))
+                    .filter(|entry| {
+                        entry
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .is_some_and(|kind| kind == "release" || kind == "snapshot")
+                    })
+                    .filter_map(|entry| entry.get("id").and_then(Value::as_str))
                     .map(String::from)
-                    .collect::<Vec<_>>(),
-                Err(_) => {
-                    let manifest = fetch_json(
-                        &client,
-                        "https://launchermeta.mojang.com/mc/game/version_manifest.json",
-                    )
-                    .await?;
-                    manifest
-                        .get("versions")
-                        .and_then(Value::as_array)
-                        .ok_or_else(|| String::from("Invalid fallback Fabric versions response"))?
-                        .iter()
-                        .filter(|entry| {
-                            entry
-                                .get("type")
-                                .and_then(Value::as_str)
-                                .is_some_and(|kind| kind == "release" || kind == "snapshot")
-                        })
-                        .filter_map(|entry| entry.get("id").and_then(Value::as_str))
-                        .map(String::from)
-                        .collect::<Vec<_>>()
-                }
+                    .collect::<Vec<_>>()
             }
-        }
+        },
         "quilt" => {
             let json = fetch_json(&client, "https://meta.quiltmc.org/v3/versions/game").await?;
             json.as_array()
@@ -3045,7 +2990,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .setup(|app| {
-            // Удаляем .sh файлы из папок серверов на Windows при старте
             #[cfg(target_os = "windows")]
             {
                 use std::fs;
@@ -3063,7 +3007,7 @@ pub fn run() {
                     }
                 }
             }
-            
+
             let show_item =
                 tauri::menu::MenuItem::with_id(app, "show", "Open Lodestone", true, None::<&str>)?;
             let quit_item =

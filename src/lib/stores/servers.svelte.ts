@@ -30,6 +30,7 @@ interface ServerStoreState {
 }
 
 const MAX_CONSOLE_LINES = 2500;
+const FALLBACK_SERVER_COMMANDS = ["help", "list", "stop", "save-all", "reload", "restart"];
 
 interface ConsoleBatch {
   server_id: string;
@@ -144,18 +145,45 @@ function appendConsoleBatch(payload: ConsoleBatch): void {
     return;
   }
 
+  const existing = serverState.consoleLines[payload.server_id] ?? [];
+  const next = existing.slice();
   const timestamps = Array.isArray(payload.timestamps) ? payload.timestamps : [];
+  let hasChanges = false;
+
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     if (typeof line !== "string") {
       continue;
     }
-    appendConsoleLine({
+
+    const entry = toConsoleEntry({
       server_id: payload.server_id,
       line,
       timestamp: timestamps[index] ?? Math.floor(Date.now() / 1000),
     });
+
+    const last = next.at(-1);
+    if (last && last.raw === entry.raw) {
+      next[next.length - 1] = {
+        ...last,
+        repeats: last.repeats + 1,
+        timestamp: entry.timestamp,
+        timestampLabel: entry.timestampLabel,
+      };
+      hasChanges = true;
+      continue;
+    }
+
+    next.push(entry);
+    hasChanges = true;
   }
+
+  if (!hasChanges) {
+    return;
+  }
+
+  const clipped = next.length > MAX_CONSOLE_LINES ? next.slice(-MAX_CONSOLE_LINES) : next;
+  updateConsoleLines(payload.server_id, clipped);
 }
 
 async function ensureEventListeners(): Promise<void> {
@@ -221,6 +249,7 @@ export async function createServer(config: NewServerConfig): Promise<ServerConfi
   try {
     const created = await invoke<ServerConfig>("create_server", { config });
     serverState.servers = [...serverState.servers, created];
+    syncServerOrder(serverState.servers);
     return created;
   } catch (error) {
     serverState.createError = error instanceof Error ? error.message : String(error);
@@ -234,7 +263,7 @@ export async function startServer(id: string): Promise<void> {
   serverState.error = null;
   try {
     await invoke("start_server", { id });
-    clearServerCommandsCache(id); // Очищаем кэш команд при старте
+    clearServerCommandsCache(id);
     await loadServers();
   } catch (error) {
     setServerError(error);
@@ -245,7 +274,7 @@ export async function stopServer(id: string): Promise<void> {
   serverState.error = null;
   try {
     await invoke("stop_server", { id });
-    clearServerCommandsCache(id); // Очищаем кэш команд при остановке
+    clearServerCommandsCache(id);
     await loadServers();
   } catch (error) {
     setServerError(error);
@@ -253,27 +282,26 @@ export async function stopServer(id: string): Promise<void> {
 }
 
 export async function restartServer(id: string): Promise<void> {
-  // Проверяем, не перезапускается ли уже сервер
   if (serverState.restartingServers.includes(id)) {
     return;
   }
-  
+
   serverState.error = null;
-  
-  // Добавляем сервер в список перезапускающихся
+
   serverState.restartingServers = [...serverState.restartingServers, id];
-  
+
   try {
     await invoke("stop_server", { id });
-    // Ждем немного, чтобы сервер полностью остановился
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    clearServerCommandsCache(id);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
     await invoke("start_server", { id });
     await loadServers();
   } catch (error) {
     setServerError(error);
   } finally {
-    // Убираем сервер из списка перезапускающихся
-    serverState.restartingServers = serverState.restartingServers.filter(serverId => serverId !== id);
+    serverState.restartingServers = serverState.restartingServers.filter(
+      (serverId) => serverId !== id,
+    );
   }
 }
 
@@ -281,6 +309,7 @@ export async function deleteServer(id: string): Promise<void> {
   serverState.error = null;
   try {
     await invoke("delete_server", { id });
+    clearServerCommandsCache(id);
     const tabs = serverState.consoleTabs.filter((tab) => tab !== id);
     serverState.consoleTabs = tabs;
     if (serverState.activeConsoleServer === id) {
@@ -363,36 +392,24 @@ export async function updateServerProfile(
 }
 
 export async function getServerCommands(id: string): Promise<string[]> {
-  // Проверяем кэш
   if (serverState.serverCommands[id]) {
     return serverState.serverCommands[id];
   }
-  
+
   try {
     const commands = await invoke<string[]>("get_server_commands", { id });
-    // Кэшируем результат
     serverState.serverCommands = {
       ...serverState.serverCommands,
-      [id]: commands
+      [id]: commands,
     };
     return commands;
   } catch (error) {
     console.error("Failed to get server commands:", error);
-    // Возвращаем базовые команды в случае ошибки
-    const fallbackCommands = [
-      "help",
-      "list",
-      "stop",
-      "save-all",
-      "reload",
-      "restart"
-    ];
-    // Кэшируем fallback команды
     serverState.serverCommands = {
       ...serverState.serverCommands,
-      [id]: fallbackCommands
+      [id]: FALLBACK_SERVER_COMMANDS,
     };
-    return fallbackCommands;
+    return FALLBACK_SERVER_COMMANDS;
   }
 }
 
@@ -474,10 +491,6 @@ export function getServerById(id: string | null): ServerConfig | null {
 
 export function isServerRestarting(id: string): boolean {
   return serverState.restartingServers.includes(id);
-}
-
-export function clearRestartingState(): void {
-  serverState.restartingServers = [];
 }
 
 export function updateServerOrder(newOrder: string[]): void {

@@ -58,7 +58,6 @@
       commandSuggestions = normalizeSuggestions(commands);
     } catch (error) {
       console.error("Failed to load server commands:", error);
-      // Fallback к базовым командам
       commandSuggestions = normalizeSuggestions([
         "help",
         "list",
@@ -286,7 +285,6 @@
     }
 
     if (event.key === "Enter" && showCompletions && selectedCompletionIndex >= 0) {
-      // Выбираем выделенную команду
       event.preventDefault();
       selectCompletion(tabCandidates[selectedCompletionIndex]);
       return;
@@ -295,13 +293,11 @@
     if (event.key === "ArrowUp") {
       event.preventDefault();
       if (showCompletions && tabCandidates.length > 0) {
-        // Навигация по подсказкам
         selectedCompletionIndex = selectedCompletionIndex <= 0 
           ? tabCandidates.length - 1 
           : selectedCompletionIndex - 1;
         ensureSelectedCompletionVisible();
       } else {
-        // Навигация по истории команд
         handleHistoryNavigation("up");
       }
       return;
@@ -310,19 +306,16 @@
     if (event.key === "ArrowDown") {
       event.preventDefault();
       if (showCompletions && tabCandidates.length > 0) {
-        // Навигация по подсказкам
         selectedCompletionIndex = selectedCompletionIndex >= tabCandidates.length - 1 
           ? 0 
           : selectedCompletionIndex + 1;
         ensureSelectedCompletionVisible();
       } else {
-        // Навигация по истории команд
         handleHistoryNavigation("down");
       }
       return;
     }
 
-    // Скрываем автодополнение при вводе
     showCompletions = false;
     tabCandidates = [];
     selectedCompletionIndex = -1;
@@ -334,14 +327,13 @@
       return;
     }
     void attachConsole(serverId);
-    void loadServerCommands(); // Загружаем команды при смене сервера
+    void loadServerCommands();
     historyCursor = null;
     tabCandidates = [];
     showCompletions = false;
     selectedCompletionIndex = -1;
   });
 
-  // Перезагружаем команды при изменении состояния сервера (запуск/остановка)
   $effect(() => {
     if (selectedServer?.running !== undefined) {
       void loadServerCommands();
