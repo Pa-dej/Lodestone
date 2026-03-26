@@ -1022,32 +1022,38 @@ async fn write_bootstrap_files(
         format!("{extra} ")
     };
 
-    let bat_body = format!(
-        "@echo off\r\n\"{java}\" -Xms{ram_mb}M -Xmx{ram_mb}M {extra_segment}-jar server.jar nogui\r\npause\r\n"
-    );
-    let sh_body =
-        format!("#!/usr/bin/env sh\n\"{java}\" -Xms{ram_mb}M -Xmx{ram_mb}M {extra_segment}-jar server.jar nogui\n");
-
-    let bat_path = server_dir.join("start.bat");
-    let sh_path = server_dir.join("start.sh");
-
-    tokio_fs::write(&bat_path, bat_body)
-        .await
-        .map_err(|err| format!("Failed to write {}: {err}", bat_path.display()))?;
-    tokio_fs::write(&sh_path, sh_body)
-        .await
-        .map_err(|err| format!("Failed to write {}: {err}", sh_path.display()))?;
-
-    #[cfg(unix)]
+    #[cfg(target_os = "windows")]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(0o755);
-        fs::set_permissions(&sh_path, perms).map_err(|err| {
-            format!(
-                "Failed to set executable permissions on {}: {err}",
-                sh_path.display()
-            )
-        })?;
+        let bat_body = format!(
+            "@echo off\r\n\"{java}\" -Xms{ram_mb}M -Xmx{ram_mb}M {extra_segment}-jar server.jar nogui\r\npause\r\n"
+        );
+        let bat_path = server_dir.join("start.bat");
+        tokio_fs::write(&bat_path, bat_body)
+            .await
+            .map_err(|err| format!("Failed to write {}: {err}", bat_path.display()))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let sh_body = format!(
+            "#!/usr/bin/env sh\n\"{java}\" -Xms{ram_mb}M -Xmx{ram_mb}M {extra_segment}-jar server.jar nogui\n"
+        );
+        let sh_path = server_dir.join("start.sh");
+        tokio_fs::write(&sh_path, sh_body)
+            .await
+            .map_err(|err| format!("Failed to write {}: {err}", sh_path.display()))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o755);
+            fs::set_permissions(&sh_path, perms).map_err(|err| {
+                format!(
+                    "Failed to set executable permissions on {}: {err}",
+                    sh_path.display()
+                )
+            })?;
+        }
     }
 
     Ok(())
@@ -2021,6 +2027,25 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .setup(|app| {
+            // Удаляем .sh файлы из папок серверов на Windows при старте
+            #[cfg(target_os = "windows")]
+            {
+                use std::fs;
+                if let Ok(servers_dir) = servers_root_dir() {
+                    if let Ok(entries) = fs::read_dir(&servers_dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.is_dir() {
+                                let sh_file = path.join("start.sh");
+                                if sh_file.exists() {
+                                    let _ = fs::remove_file(&sh_file);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
             let show_item =
                 tauri::menu::MenuItem::with_id(app, "show", "Open Lodestone", true, None::<&str>)?;
             let quit_item =
