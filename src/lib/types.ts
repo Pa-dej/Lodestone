@@ -22,6 +22,13 @@ export interface NewServerConfig {
   properties: ServerPropertiesConfig;
 }
 
+export interface UpdateServerProfileConfig {
+  id: string;
+  name: string;
+  port: number;
+  ram_mb: number;
+}
+
 export interface AppSettings {
   java_path: string;
   max_ram_mb: number;

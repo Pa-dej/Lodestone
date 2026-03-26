@@ -8,6 +8,7 @@ import type {
   NewServerConfig,
   ServerPropertyEntry,
   ServerConfig,
+  UpdateServerProfileConfig,
 } from "$lib/types";
 import { toConsoleEntry } from "$lib/utils/console";
 
@@ -311,6 +312,20 @@ export async function deleteServer(id: string): Promise<void> {
     await loadServers();
   } catch (error) {
     setServerError(error);
+  }
+}
+
+export async function updateServerProfile(config: UpdateServerProfileConfig): Promise<ServerConfig | null> {
+  serverState.error = null;
+  try {
+    const updated = await invoke<ServerConfig>("update_server_profile", { config });
+    serverState.servers = serverState.servers.map((server) =>
+      server.id === updated.id ? updated : server
+    );
+    return updated;
+  } catch (error) {
+    setServerError(error);
+    return null;
   }
 }
 

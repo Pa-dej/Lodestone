@@ -6,6 +6,7 @@
   import UsersIcon from "../../icons/Users.svg?raw";
   import TrashIcon from "../../icons/Trash.svg?raw";
   import FolderOpenIcon from "../../icons/FolderOpen.svg?raw";
+  import EditIcon from "../../icons/Edit.svg?raw";
   import PaperIcon from "../../icons/servers/Paper.svg?raw";
   import PurpurIcon from "../../icons/servers/Purpur.svg?raw";
   import FabricIcon from "../../icons/servers/Fabric.svg?raw";
@@ -23,6 +24,7 @@
     onRestart: (id: string) => void;
     onDelete: (id: string) => void;
     onOpenFolder: (id: string) => void;
+    onEdit: (id: string) => void;
     onOpenConsole: (id: string) => void;
   }
 
@@ -31,7 +33,7 @@
     color: string;
   }
 
-  let { server, onStart, onStop, onRestart, onDelete, onOpenFolder, onOpenConsole }: Props = $props();
+  let { server, onStart, onStop, onRestart, onDelete, onOpenFolder, onEdit, onOpenConsole }: Props = $props();
 
   const isRestarting = $derived(isServerRestarting(server.id));
 
@@ -43,6 +45,10 @@
     folia: { iconSvg: FoliaIcon, color: "var(--core-folia)" },
     vanilla: { iconSvg: VanillaIcon, color: "var(--core-vanilla)" },
   };
+
+  function stopCardDrag(event: MouseEvent | TouchEvent): void {
+    event.stopPropagation();
+  }
 </script>
 
 <article class="card server-card" class:running={server.running} style={`--core-color:${coreVisuals[server.core].color}`}>
@@ -62,15 +68,29 @@
         type="button"
         class="btn-icon btn-folder"
         title={t("open_in_explorer")}
+        onmousedown={stopCardDrag}
+        ontouchstart={stopCardDrag}
         onclick={() => onOpenFolder(server.id)}
       >
         {@html FolderOpenIcon}
+      </button>
+      <button
+        type="button"
+        class="btn-icon btn-edit"
+        title={t("server_edit_profile")}
+        onmousedown={stopCardDrag}
+        ontouchstart={stopCardDrag}
+        onclick={() => onEdit(server.id)}
+      >
+        {@html EditIcon}
       </button>
       <button 
         type="button" 
         class="btn-icon btn-delete" 
         title={t("delete_server_title")}
         disabled={server.running}
+        onmousedown={stopCardDrag}
+        ontouchstart={stopCardDrag}
         onclick={() => onDelete(server.id)}
       >
         {@html TrashIcon}
@@ -96,6 +116,8 @@
         type="button" 
         class="btn btn-danger btn-sm" 
         disabled={isRestarting}
+        onmousedown={stopCardDrag}
+        ontouchstart={stopCardDrag}
         onclick={() => onStop(server.id)}
       >
         ■ {t("action_stop")}
@@ -106,18 +128,32 @@
         class:btn-warning={isRestarting}
         class:btn-secondary={!isRestarting}
         disabled={isRestarting}
+        onmousedown={stopCardDrag}
+        ontouchstart={stopCardDrag}
         onclick={() => onRestart(server.id)}
       >
         <span class="btn-icon-inline" class:spinning={isRestarting}>{@html RestartIcon}</span>
         <span>{isRestarting ? t("action_restarting") : t("action_restart")}</span>
       </button>
     {:else}
-      <button type="button" class="btn btn-primary btn-sm" onclick={() => onStart(server.id)}>
+      <button
+        type="button"
+        class="btn btn-primary btn-sm"
+        onmousedown={stopCardDrag}
+        ontouchstart={stopCardDrag}
+        onclick={() => onStart(server.id)}
+      >
         <span class="btn-icon-inline">{@html PlayIcon}</span>
         <span>{t("action_start")}</span>
       </button>
     {/if}
-    <button type="button" class="btn btn-secondary btn-sm" onclick={() => onOpenConsole(server.id)}>
+    <button
+      type="button"
+      class="btn btn-secondary btn-sm"
+      onmousedown={stopCardDrag}
+      ontouchstart={stopCardDrag}
+      onclick={() => onOpenConsole(server.id)}
+    >
       <span class="btn-icon-inline">{@html TerminalIcon}</span>
       <span>{t("action_console")}</span>
     </button>
@@ -133,6 +169,7 @@
     flex-direction: column;
     gap: 12px;
     min-height: 240px;
+    user-select: none;
   }
 
   .server-card > :not(.server-bg-icon) {
@@ -247,9 +284,29 @@
     height: 14px;
   }
 
+  .btn-edit {
+    width: 28px;
+    height: 28px;
+    color: var(--text-hint);
+    background: transparent;
+    border: 0.5px solid transparent;
+    transition: all var(--tr);
+  }
+
+  .btn-edit:hover:not(:disabled) {
+    color: var(--accent);
+    background: var(--accent-bg);
+    border-color: var(--accent);
+  }
+
+  .btn-edit :global(svg) {
+    width: 14px;
+    height: 14px;
+  }
+
   .server-icon {
-    width: 42px;
-    height: 42px;
+    width: 32px;
+    height: 32px;
     border-radius: var(--r-md);
     color: var(--core-color);
     background: var(--surface-2);
@@ -257,11 +314,12 @@
     place-items: center;
     font-size: 20px;
     border: 0.5px solid var(--border);
+    flex-shrink: 0;
   }
 
   .server-icon :global(svg) {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
   }
 
   .server-icon.running {

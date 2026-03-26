@@ -2,6 +2,7 @@
   import { goto } from "$app/navigation";
   import { onMount } from "svelte";
   import NewServerModal from "$lib/components/NewServerModal.svelte";
+  import EditServerModal from "$lib/components/EditServerModal.svelte";
   import DeleteConfirmModal from "$lib/components/DeleteConfirmModal.svelte";
   import ServerAddCard from "$lib/components/ServerAddCard.svelte";
   import ServerCard from "$lib/components/ServerCard.svelte";
@@ -13,6 +14,7 @@
     stopServer, 
     restartServer, 
     deleteServer,
+    updateServerProfile,
     getOrderedServers,
     updateServerOrder
   } from "$lib/stores/servers.svelte";
@@ -21,6 +23,8 @@
   import { buildPreviewOrder, type DragState } from "$lib/utils/dragdrop";
 
   let isModalOpen = $state(false);
+  let isEditModalOpen = $state(false);
+  let editingServer = $state<ServerConfig | null>(null);
   let deleteModalOpen = $state(false);
   let deletingServer = $state<ServerConfig | null>(null);
   let deleteInProgress = $state(false);
@@ -53,6 +57,31 @@
 
   function closeCreateModal(): void {
     isModalOpen = false;
+  }
+
+  function requestEdit(server: ServerConfig): void {
+    editingServer = server;
+    isEditModalOpen = true;
+  }
+
+  function closeEditModal(): void {
+    isEditModalOpen = false;
+    editingServer = null;
+  }
+
+  async function saveServerProfile(payload: {
+    id: string;
+    name: string;
+    port: number;
+    ram_mb: number;
+  }): Promise<void> {
+    const updated = await updateServerProfile(payload);
+    if (!updated) {
+      throw new Error(serverState.error ?? "Failed to update server profile");
+    }
+
+    editingServer = updated;
+    closeEditModal();
   }
 
   function openConsole(serverId: string): void {
@@ -317,6 +346,7 @@
             onOpenFolder={(id) => {
               void openServerFolder(id);
             }}
+            onEdit={() => requestEdit(server)}
             onOpenConsole={openConsole}
           />
         </div>
@@ -338,6 +368,13 @@
     onCreated={() => {
       closeCreateModal();
     }}
+  />
+
+  <EditServerModal
+    open={isEditModalOpen}
+    server={editingServer}
+    onClose={closeEditModal}
+    onSave={saveServerProfile}
   />
 
   <DeleteConfirmModal

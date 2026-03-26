@@ -27,6 +27,7 @@
     gap: 10px;
     cursor: pointer;
     transition: border-color var(--tr), color var(--tr), background var(--tr);
+    user-select: none;
   }
 
   .add-card:hover {

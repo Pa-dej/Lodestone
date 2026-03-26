@@ -149,12 +149,14 @@
     font-weight: 300;
     line-height: 1;
     margin-top: 3px;
+    user-select: none;
   }
 
   .topbar-controls {
     display: inline-flex;
     gap: 6px;
     align-items: center;
+    user-select: none;
   }
 
   .carousel-theme-btn {
@@ -182,6 +184,7 @@
     border-radius: var(--r-md);
     overflow: hidden;
     background: var(--surface);
+    user-select: none;
   }
 
   .lang-btn {

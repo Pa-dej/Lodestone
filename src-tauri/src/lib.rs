@@ -160,6 +160,14 @@ pub struct NewServerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateServerProfileConfig {
+    id: String,
+    name: String,
+    port: u16,
+    ram_mb: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerPropertiesConfig {
     motd: String,
     gamemode: String,
@@ -1044,6 +1052,55 @@ fn stringify_server_properties(entries: &[ServerPropertyEntry]) -> String {
         body.push('\n');
     }
     body
+}
+
+async fn upsert_server_property(
+    server_path: &Path,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
+    let normalized_key = sanitized_property_key(key);
+    if normalized_key.is_empty() {
+        return Ok(());
+    }
+
+    let normalized_value = sanitized_property_value(value);
+    let properties_path = server_path.join("server.properties");
+    let mut entries = if properties_path.exists() {
+        let content = tokio_fs::read_to_string(&properties_path).await.map_err(|err| {
+            format!(
+                "Failed to read server properties {}: {err}",
+                properties_path.display()
+            )
+        })?;
+        parse_server_properties(&content)
+    } else {
+        Vec::new()
+    };
+
+    if let Some(existing) = entries
+        .iter_mut()
+        .find(|entry| entry.key.eq_ignore_ascii_case(&normalized_key))
+    {
+        existing.key = normalized_key.clone();
+        existing.value = normalized_value;
+    } else {
+        entries.push(ServerPropertyEntry {
+            key: normalized_key,
+            value: normalized_value,
+        });
+    }
+
+    entries.sort_by(|a, b| a.key.cmp(&b.key));
+    let body = stringify_server_properties(&entries);
+    tokio_fs::write(&properties_path, body).await.map_err(|err| {
+        format!(
+            "Failed to write server properties {}: {err}",
+            properties_path.display()
+        )
+    })?;
+
+    Ok(())
 }
 
 async fn place_generated_server_jar(
@@ -2094,6 +2151,47 @@ async fn delete_server(state: State<'_, AppState>, id: String) -> Result<(), Str
 }
 
 #[tauri::command]
+async fn update_server_profile(
+    state: State<'_, AppState>,
+    config: UpdateServerProfileConfig,
+) -> Result<ServerConfig, String> {
+    if config.port == 0 {
+        return Err(String::from("Port must be between 1 and 65535"));
+    }
+
+    let mut servers = load_servers_cached(&state).await?;
+    let index = servers
+        .iter()
+        .position(|item| item.id == config.id)
+        .ok_or_else(|| String::from("Server not found"))?;
+
+    let running_now = {
+        let running = state.running.lock().await;
+        running.contains_key(&config.id)
+    };
+
+    let normalized_name = server_name_or_default(&config.name);
+    let normalized_ram = config.ram_mb.clamp(256, 262_144);
+    let current_port = servers[index].port;
+
+    if config.port != current_port {
+        ensure_server_port_available(config.port)?;
+    }
+
+    servers[index].name = normalized_name;
+    servers[index].port = config.port;
+    servers[index].ram_mb = normalized_ram;
+    servers[index].running = running_now;
+
+    let updated = servers[index].clone();
+
+    upsert_server_property(&updated.path, "server-port", &updated.port.to_string()).await?;
+    save_servers_to_disk(&servers, Some(&state)).await?;
+
+    Ok(updated)
+}
+
+#[tauri::command]
 async fn open_server_folder(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let server = load_servers_cached(&state)
         .await?
@@ -2653,6 +2751,7 @@ pub fn run() {
             start_server,
             stop_server,
             delete_server,
+            update_server_profile,
             open_server_folder,
             get_server_properties,
             save_server_properties,

@@ -96,12 +96,14 @@
     letter-spacing: -0.02em;
     font-size: 28px;
     line-height: 1;
+    user-select: none;
   }
 
   .sidebar-nav {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    user-select: none;
   }
 
   .sidebar-link {
