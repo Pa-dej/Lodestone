@@ -97,7 +97,7 @@
     // Вычисляем размеры карточки
     const totalGapWidth = gap * (columns - 1);
     const cardWidth = (gridRect.width - totalGapWidth) / columns;
-    const cardHeight = 200; // min-height из стилей
+    const cardHeight = 240; // увеличенная высота для размещения всех кнопок
     
     // Вычисляем позицию
     const row = Math.floor(index / columns);
@@ -361,7 +361,7 @@
 
   .servers-grid-wrapper {
     position: relative;
-    min-height: 200px;
+    min-height: 240px;
   }
 
   .servers-grid {

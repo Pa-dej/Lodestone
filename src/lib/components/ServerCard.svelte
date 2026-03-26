@@ -132,7 +132,7 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    min-height: 180px;
+    min-height: 240px;
   }
 
   .server-card > :not(.server-bg-icon) {
