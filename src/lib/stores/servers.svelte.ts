@@ -30,55 +30,13 @@ interface ServerStoreState {
 }
 
 const MAX_CONSOLE_LINES = 2500;
-const FALLBACK_SERVER_COMMANDS = [
-  "help",
-  "list",
-  "plugins",
-  "pl",
-  "plugin list",
-  "plugin add",
-  "plugin install",
-  "plugin remove",
-  "plugin delete",
-  "plugin update",
-  "stop",
-  "save-all",
-  "reload",
-  "restart",
-];
-const FABRIC_EMERGENCY_VERSIONS = [
-  "1.21.11",
-  "1.21.10",
-  "1.21.9",
-  "1.21.8",
-  "1.21.7",
-  "1.21.6",
-  "1.21.5",
-  "1.21.4",
-  "1.21.3",
-  "1.21.2",
-  "1.21.1",
-  "1.21",
-  "1.20.6",
-  "1.20.5",
-  "1.20.4",
-  "1.20.3",
-  "1.20.2",
-  "1.20.1",
-  "1.20",
-  "1.19.4",
-  "1.19.3",
-  "1.19.2",
-  "1.19.1",
-  "1.19",
-  "1.18.2",
-  "1.18.1",
-  "1.18",
-  "1.17.1",
-  "1.17",
-  "1.16.5",
-] as const;
-const VERSION_DEBUG_PREFIX = "[lodestone:versions]";
+
+interface ConsoleBatch {
+  server_id: string;
+  lines: string[];
+  timestamps: number[];
+}
+
 
 export const serverState = $state<ServerStoreState>({
   servers: [],
@@ -97,144 +55,60 @@ export const serverState = $state<ServerStoreState>({
   serverOrder: [],
 });
 
-let consoleUnlisten: UnlistenFn | null = null;
+let consoleLineUnlisten: UnlistenFn | null = null;
+let consoleBatchUnlisten: UnlistenFn | null = null;
 let downloadUnlisten: UnlistenFn | null = null;
 let pollHandle: ReturnType<typeof setInterval> | null = null;
-const versionsCache: Partial<Record<CoreType, string[]>> = {};
 
 function setServerError(error: unknown): void {
   serverState.error = error instanceof Error ? error.message : String(error);
 }
 
-function versionErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return `${error.name}: ${error.message}`;
+function syncServerOrder(servers: ServerConfig[]): void {
+  if (serverState.serverOrder.length === 0) {
+    serverState.serverOrder = servers.map((server) => server.id);
+    return;
   }
-  return String(error);
+
+  const ids = new Set(servers.map((server) => server.id));
+  const existing = serverState.serverOrder.filter((id) => ids.has(id));
+  const existingSet = new Set(existing);
+  const appended = servers.map((server) => server.id).filter((id) => !existingSet.has(id));
+  serverState.serverOrder = [...existing, ...appended];
 }
 
-function dedupeAndSortVersions(versions: string[]): string[] {
-  return [...new Set(versions)].sort((a, b) =>
-    b.localeCompare(a, undefined, { numeric: true, sensitivity: "base" }),
-  );
-}
-
-async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} for ${url}`);
+function uniqueVersions(versions: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const version of versions) {
+    if (seen.has(version)) {
+      continue;
+    }
+    seen.add(version);
+    result.push(version);
   }
-  return (await response.json()) as T;
+  return result;
 }
 
 async function fetchFabricVersionsDirect(): Promise<string[]> {
-  console.debug(`${VERSION_DEBUG_PREFIX} Fabric fallback: try direct Fabric API`);
-  try {
-    const fabric = await fetchJson<Array<{ version?: string }>>(
-      "https://meta.fabricmc.net/v2/versions/game",
-    );
-    const versions = fabric
+  console.debug("[lodestone:fabric] direct fetch start");
+  const response = await fetch("https://meta.fabricmc.net/v2/versions/game");
+  if (!response.ok) {
+    throw new Error(`Fabric API returned HTTP ${response.status}`);
+  }
+
+  const payload = (await response.json()) as Array<{ version?: string }>;
+  const versions = uniqueVersions(
+    payload
       .map((entry) => entry.version?.trim() ?? "")
-      .filter((entry) => entry.length > 0);
-    if (versions.length > 0) {
-      console.debug(
-        `${VERSION_DEBUG_PREFIX} Fabric fallback: Fabric API returned ${versions.length} versions`,
-      );
-      return dedupeAndSortVersions(versions);
-    }
-    console.warn(`${VERSION_DEBUG_PREFIX} Fabric fallback: Fabric API returned empty list`);
-  } catch (error) {
-    console.warn(
-      `${VERSION_DEBUG_PREFIX} Fabric fallback: Fabric API failed, switching to Mojang manifest`,
-      error,
-    );
-  }
-
-  console.debug(`${VERSION_DEBUG_PREFIX} Fabric fallback: try Mojang manifest`);
-  const manifest = await fetchJson<{ versions?: Array<{ id?: string; type?: string }> }>(
-    "https://launchermeta.mojang.com/mc/game/version_manifest.json",
+      .filter((version) => version.length > 0),
   );
-  const versions = (manifest.versions ?? [])
-    .filter((entry) => entry.type === "release" || entry.type === "snapshot")
-    .map((entry) => entry.id?.trim() ?? "")
-    .filter((entry) => entry.length > 0);
 
-  console.debug(
-    `${VERSION_DEBUG_PREFIX} Fabric fallback: Mojang manifest returned ${versions.length} versions`,
-  );
-  return dedupeAndSortVersions(versions);
+  console.debug(`[lodestone:fabric] direct fetch done, versions=${versions.length}`);
+  return versions;
 }
 
-async function invokeVersionsWithRetry(core: CoreType, attempts = 6): Promise<string[]> {
-  console.debug(`${VERSION_DEBUG_PREFIX} Start fetch_versions for core=${core}, attempts=${attempts}`);
-  let lastError: unknown = null;
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    console.debug(`${VERSION_DEBUG_PREFIX} IPC attempt ${attempt}/${attempts} for core=${core}`);
-    try {
-      const versions = await invoke<string[]>("fetch_versions", { core });
-      console.debug(
-        `${VERSION_DEBUG_PREFIX} IPC success for core=${core} on attempt=${attempt}, versions=${versions.length}`,
-      );
-      return versions;
-    } catch (error) {
-      lastError = error;
-      console.warn(
-        `${VERSION_DEBUG_PREFIX} IPC failed for core=${core} on attempt=${attempt}: ${versionErrorMessage(error)}`,
-        error,
-      );
-      if (attempt < attempts) {
-        const delayMs = Math.min(200 * 2 ** (attempt - 1), 2000);
-        console.debug(
-          `${VERSION_DEBUG_PREFIX} Waiting ${delayMs}ms before next attempt for core=${core}`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-  }
 
-  if (core === "fabric") {
-    console.warn(
-      `${VERSION_DEBUG_PREFIX} All IPC attempts exhausted for Fabric. Switching to direct HTTP fallback.`,
-    );
-    try {
-      const versions = await fetchFabricVersionsDirect();
-      console.debug(
-        `${VERSION_DEBUG_PREFIX} Fabric HTTP fallback success, versions=${versions.length}`,
-      );
-      return versions;
-    } catch (error) {
-      console.error(
-        `${VERSION_DEBUG_PREFIX} Fabric HTTP fallback failed. Using emergency versions list.`,
-        error,
-      );
-      return [...FABRIC_EMERGENCY_VERSIONS];
-    }
-  }
-
-  console.error(
-    `${VERSION_DEBUG_PREFIX} fetch_versions failed for core=${core} after ${attempts} attempts`,
-    lastError,
-  );
-  throw lastError ?? new Error("Failed to fetch versions");
-}
-
-function shouldInvalidateServerCommandsCache(command: string): boolean {
-  const normalized = command.trim().replace(/^\/+/, "").toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-
-  return (
-    normalized === "reload" ||
-    normalized.startsWith("reload ") ||
-    normalized.startsWith("plugin ") ||
-    normalized === "plugins" ||
-    normalized.startsWith("plugins ") ||
-    normalized.startsWith("plugman ") ||
-    normalized === "pl" ||
-    normalized.startsWith("pl ")
-  );
-}
 
 function updateConsoleLines(serverId: string, nextLines: ConsoleEntry[]): void {
   serverState.consoleLines = {
@@ -264,47 +138,37 @@ function appendConsoleLine(payload: ConsoleLine): void {
   updateConsoleLines(payload.server_id, clipped);
 }
 
-// Обработка батча строк консоли (оптимизация производительности)
-function appendConsoleBatch(payload: { server_id: string; lines: string[]; timestamps: number[] }): void {
-  const existing = serverState.consoleLines[payload.server_id] ?? [];
-  
-  // Преобразуем батч в entries
-  const newEntries: ConsoleEntry[] = [];
-  for (let i = 0; i < payload.lines.length; i++) {
-    const entry = toConsoleEntry({
-      server_id: payload.server_id,
-      line: payload.lines[i],
-      timestamp: payload.timestamps[i],
-    });
-    newEntries.push(entry);
+function appendConsoleBatch(payload: ConsoleBatch): void {
+  const lines = Array.isArray(payload.lines) ? payload.lines : [];
+  if (lines.length === 0) {
+    return;
   }
-  
-  // Объединяем с существующими и обрезаем
-  const combined = [...existing, ...newEntries];
-  const clipped = combined.length > MAX_CONSOLE_LINES ? combined.slice(-MAX_CONSOLE_LINES) : combined;
-  updateConsoleLines(payload.server_id, clipped);
+
+  const timestamps = Array.isArray(payload.timestamps) ? payload.timestamps : [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (typeof line !== "string") {
+      continue;
+    }
+    appendConsoleLine({
+      server_id: payload.server_id,
+      line,
+      timestamp: timestamps[index] ?? Math.floor(Date.now() / 1000),
+    });
+  }
 }
 
 async function ensureEventListeners(): Promise<void> {
-  if (!consoleUnlisten) {
-    // Слушаем батчи (основной канал, оптимизированный)
-    const batchUnlisten = await listen<{ server_id: string; lines: string[]; timestamps: number[] }>(
-      "console_batch",
-      ({ payload }) => {
-        appendConsoleBatch(payload);
-      }
-    );
-    
-    // Слушаем одиночные строки (fallback для совместимости)
-    const lineUnlisten = await listen<ConsoleLine>("console_line", ({ payload }) => {
+  if (!consoleLineUnlisten) {
+    consoleLineUnlisten = await listen<ConsoleLine>("console_line", ({ payload }) => {
       appendConsoleLine(payload);
     });
-    
-    // Сохраняем оба unlistener'а
-    consoleUnlisten = () => {
-      batchUnlisten();
-      lineUnlisten();
-    };
+  }
+
+  if (!consoleBatchUnlisten) {
+    consoleBatchUnlisten = await listen<ConsoleBatch>("console_batch", ({ payload }) => {
+      appendConsoleBatch(payload);
+    });
   }
 
   if (!downloadUnlisten) {
@@ -325,40 +189,7 @@ export async function loadServers(): Promise<void> {
   try {
     const list = await invoke<ServerConfig[]>("list_servers");
     serverState.servers = list;
-    
-    // Загружаем сохраненный порядок из localStorage
-    const savedOrder = localStorage.getItem('server_order');
-    if (savedOrder) {
-      try {
-        const parsed = JSON.parse(savedOrder) as string[];
-        const currentIds = new Set(list.map(s => s.id));
-        // Фильтруем только существующие серверы
-        const validOrder = parsed.filter(id => currentIds.has(id));
-        // Добавляем новые серверы в конец
-        const existingIds = new Set(validOrder);
-        const newIds = list.map(s => s.id).filter(id => !existingIds.has(id));
-        serverState.serverOrder = [...validOrder, ...newIds];
-      } catch {
-        // Если не удалось распарсить, используем порядок по умолчанию
-        serverState.serverOrder = list.map(s => s.id);
-      }
-    } else if (serverState.serverOrder.length === 0) {
-      // Инициализируем порядок серверов, если он пустой
-      serverState.serverOrder = list.map(s => s.id);
-    } else {
-      // Добавляем новые серверы в конец
-      const existingIds = new Set(serverState.serverOrder);
-      const newIds = list.map(s => s.id).filter(id => !existingIds.has(id));
-      if (newIds.length > 0) {
-        serverState.serverOrder = [...serverState.serverOrder, ...newIds];
-      }
-      // Удаляем несуществующие серверы
-      const currentIds = new Set(list.map(s => s.id));
-      serverState.serverOrder = serverState.serverOrder.filter(id => currentIds.has(id));
-    }
-    
-    // Сохраняем порядок в localStorage
-    localStorage.setItem('server_order', JSON.stringify(serverState.serverOrder));
+    syncServerOrder(list);
   } catch (error) {
     setServerError(error);
   } finally {
@@ -461,20 +292,6 @@ export async function deleteServer(id: string): Promise<void> {
   }
 }
 
-export async function updateServerProfile(config: UpdateServerProfileConfig): Promise<ServerConfig | null> {
-  serverState.error = null;
-  try {
-    const updated = await invoke<ServerConfig>("update_server_profile", { config });
-    serverState.servers = serverState.servers.map((server) =>
-      server.id === updated.id ? updated : server
-    );
-    return updated;
-  } catch (error) {
-    setServerError(error);
-    return null;
-  }
-}
-
 export async function openServerFolder(id: string): Promise<void> {
   serverState.error = null;
   try {
@@ -521,13 +338,27 @@ export async function sendServerCommand(id: string, command: string): Promise<bo
         [id]: next,
       };
     }
-    if (shouldInvalidateServerCommandsCache(trimmed)) {
-      clearServerCommandsCache(id);
-    }
     return true;
   } catch (error) {
     setServerError(error);
     return false;
+  }
+}
+
+export async function updateServerProfile(
+  config: UpdateServerProfileConfig,
+): Promise<ServerConfig | null> {
+  serverState.error = null;
+  try {
+    const updated = await invoke<ServerConfig>("update_server_profile", { config });
+    serverState.servers = serverState.servers.map((server) =>
+      server.id === updated.id ? updated : server,
+    );
+    syncServerOrder(serverState.servers);
+    return updated;
+  } catch (error) {
+    setServerError(error);
+    return null;
   }
 }
 
@@ -547,12 +378,21 @@ export async function getServerCommands(id: string): Promise<string[]> {
     return commands;
   } catch (error) {
     console.error("Failed to get server commands:", error);
+    // Возвращаем базовые команды в случае ошибки
+    const fallbackCommands = [
+      "help",
+      "list",
+      "stop",
+      "save-all",
+      "reload",
+      "restart"
+    ];
     // Кэшируем fallback команды
     serverState.serverCommands = {
       ...serverState.serverCommands,
-      [id]: FALLBACK_SERVER_COMMANDS
+      [id]: fallbackCommands
     };
-    return FALLBACK_SERVER_COMMANDS;
+    return fallbackCommands;
   }
 }
 
@@ -566,23 +406,15 @@ export function clearServerCommandsCache(id?: string): void {
 }
 
 export async function fetchVersions(core: CoreType): Promise<string[]> {
-  const cached = versionsCache[core];
-  if (cached && cached.length > 0) {
-    console.debug(`${VERSION_DEBUG_PREFIX} cache hit for core=${core}, versions=${cached.length}`);
-    return cached;
-  }
-
-  console.debug(`${VERSION_DEBUG_PREFIX} cache miss for core=${core}`);
   try {
-    const versions = await invokeVersionsWithRetry(core);
-    console.debug(`${VERSION_DEBUG_PREFIX} fetch completed for core=${core}, versions=${versions.length}`);
-    if (versions.length > 0) {
-      versionsCache[core] = versions;
-      console.debug(`${VERSION_DEBUG_PREFIX} cache store for core=${core}, versions=${versions.length}`);
+    if (core === "fabric") {
+      return await fetchFabricVersionsDirect();
     }
-    return versions;
+    return await invoke<string[]>("fetch_versions", { core });
   } catch (error) {
-    console.error(`${VERSION_DEBUG_PREFIX} final failure for core=${core}`, error);
+    if (core === "fabric") {
+      console.error("[lodestone:fabric] direct fetch failed", error);
+    }
     setServerError(error);
     return [];
   }
@@ -648,27 +480,43 @@ export function clearRestartingState(): void {
   serverState.restartingServers = [];
 }
 
+export function updateServerOrder(newOrder: string[]): void {
+  const existingIds = new Set(serverState.servers.map((server) => server.id));
+  const filtered = newOrder.filter((id) => existingIds.has(id));
+  const filteredSet = new Set(filtered);
+  const missing = serverState.servers
+    .map((server) => server.id)
+    .filter((id) => !filteredSet.has(id));
+  serverState.serverOrder = [...filtered, ...missing];
+}
+
+export function getOrderedServers(): ServerConfig[] {
+  const serverMap = new Map(serverState.servers.map((server) => [server.id, server]));
+  const ordered = serverState.serverOrder
+    .map((id) => serverMap.get(id))
+    .filter((server): server is ServerConfig => server !== undefined);
+
+  if (ordered.length === serverState.servers.length) {
+    return ordered;
+  }
+
+  const orderedIds = new Set(ordered.map((server) => server.id));
+  const missing = serverState.servers.filter((server) => !orderedIds.has(server.id));
+  return [...ordered, ...missing];
+}
+
 export function shutdownServerStore(): void {
   stopPollingServers();
-  if (consoleUnlisten) {
-    void consoleUnlisten();
-    consoleUnlisten = null;
+  if (consoleLineUnlisten) {
+    void consoleLineUnlisten();
+    consoleLineUnlisten = null;
+  }
+  if (consoleBatchUnlisten) {
+    void consoleBatchUnlisten();
+    consoleBatchUnlisten = null;
   }
   if (downloadUnlisten) {
     void downloadUnlisten();
     downloadUnlisten = null;
   }
-}
-
-export function updateServerOrder(newOrder: string[]): void {
-  serverState.serverOrder = newOrder;
-  // Сохраняем порядок в localStorage
-  localStorage.setItem('server_order', JSON.stringify(newOrder));
-}
-
-export function getOrderedServers(): ServerConfig[] {
-  const serverMap = new Map(serverState.servers.map(s => [s.id, s]));
-  return serverState.serverOrder
-    .map(id => serverMap.get(id))
-    .filter((s): s is ServerConfig => s !== undefined);
 }
