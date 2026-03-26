@@ -22,13 +22,27 @@ use tokio::{
     fs as tokio_fs,
     io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, Command},
-    sync::Mutex as AsyncMutex,
+    sync::{mpsc, Mutex as AsyncMutex},
 };
 use uuid::Uuid;
 
 const CONSOLE_EVENT: &str = "console_line";
+const CONSOLE_BATCH_EVENT: &str = "console_batch";
 const DOWNLOAD_PROGRESS_EVENT: &str = "download_progress";
 const MAX_CONSOLE_LINES: usize = 50;
+const CONSOLE_CHANNEL_SIZE: usize = 64; // Уменьшен для экономии памяти (было 1024)
+const BATCH_SIZE: usize = 64; // Размер батча для отправки в UI
+const BATCH_INTERVAL_MS: u64 = 50; // Интервал flush батча (миллисекунды)
+
+// Event-driven архитектура: события консоли
+#[derive(Debug, Clone)]
+enum ConsoleEvent {
+    Line {
+        server_id: Arc<str>,
+        line: Arc<str>,
+        timestamp: u64,
+    },
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -115,6 +129,13 @@ struct ConsoleLinePayload {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct ConsoleBatchPayload {
+    server_id: String,
+    lines: Vec<String>,
+    timestamps: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct DownloadProgressPayload {
     server_id: String,
     filename: String,
@@ -128,7 +149,9 @@ struct DownloadProgressPayload {
 #[derive(Clone)]
 struct RunningServer {
     stdin: Arc<AsyncMutex<ChildStdin>>,
-    recent_lines: Arc<SyncRwLock<VecDeque<Box<str>>>>, // Box<str> вместо String для меньшего потребления памяти
+    #[allow(dead_code)] // Хранится для поддержания канала открытым
+    console_tx: mpsc::Sender<ConsoleEvent>, // Event streaming вместо shared state
+    recent_lines: Arc<SyncRwLock<VecDeque<Box<str>>>>, // Box<str> вместо Arc<str> для экономии памяти (нет atomic refcount)
 }
 
 #[derive(Clone, Default)]
@@ -1194,10 +1217,9 @@ async fn install_core_jar(
 }
 
 fn spawn_console_reader<R>(
-    app_handle: AppHandle, 
-    server_id: String, 
+    server_id: Arc<str>,
     reader: R,
-    recent_lines: Arc<SyncRwLock<VecDeque<Box<str>>>>,
+    console_tx: mpsc::Sender<ConsoleEvent>,
 )
 where
     R: AsyncRead + Send + Unpin + 'static,
@@ -1206,20 +1228,124 @@ where
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(raw_line)) = lines.next_line().await {
             let stripped = strip_ansi_escapes::strip(raw_line.as_bytes());
-            let normalized = String::from_utf8_lossy(&stripped).into_owned();
             
-            // Сохраняем строку в кэш (последние MAX_CONSOLE_LINES строк) - O(1) операции с VecDeque
-            {
-                let mut cache = recent_lines.write();
-                if cache.len() >= MAX_CONSOLE_LINES {
-                    cache.pop_front(); // O(1) вместо remove(0)
-                }
-                cache.push_back(normalized.clone().into_boxed_str()); // Box<str> для меньшего потребления памяти
+            // Оптимизированная конвертация UTF-8: в 99% случаев это валидный UTF-8
+            let line: Arc<str> = match String::from_utf8(stripped) {
+                Ok(s) => s.into(),
+                Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned().into(),
+            };
+            
+            let timestamp = now_timestamp_secs();
+            
+            // Lock-free: просто отправляем событие в канал
+            // Если канал полон, send() будет ждать (backpressure)
+            let event = ConsoleEvent::Line {
+                server_id: server_id.clone(),
+                line,
+                timestamp,
+            };
+            
+            if console_tx.send(event).await.is_err() {
+                // Канал закрыт, выходим
+                break;
             }
-            
-            emit_console_line(&app_handle, &server_id, &normalized);
         }
     });
+}
+
+// Event processor: единственный владелец cache, обрабатывает события с batching
+fn spawn_console_processor(
+    app_handle: AppHandle,
+    server_id: String,
+    mut console_rx: mpsc::Receiver<ConsoleEvent>,
+    recent_lines: Arc<SyncRwLock<VecDeque<Box<str>>>>,
+) {
+    tokio::spawn(async move {
+        // Буфер для batching (используем Box<str> для экономии памяти)
+        let mut buffer: Vec<(Box<str>, u64)> = Vec::with_capacity(BATCH_SIZE);
+        
+        // Таймер для периодического flush
+        let mut interval = tokio::time::interval(Duration::from_millis(BATCH_INTERVAL_MS));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        
+        loop {
+            tokio::select! {
+                // Получаем события из канала
+                Some(event) = console_rx.recv() => {
+                    match event {
+                        ConsoleEvent::Line { server_id: event_server_id, line, timestamp } => {
+                            // Фильтруем только события этого сервера
+                            if event_server_id.as_ref() != server_id {
+                                continue;
+                            }
+                            
+                            // Конвертируем Arc<str> в Box<str> для экономии памяти
+                            let boxed_line: Box<str> = line.to_string().into_boxed_str();
+                            buffer.push((boxed_line, timestamp));
+                            
+                            // Flush если буфер заполнен
+                            if buffer.len() >= BATCH_SIZE {
+                                flush_console_batch(&app_handle, &server_id, &mut buffer, &recent_lines);
+                            }
+                        }
+                    }
+                }
+                
+                // Периодический flush по таймеру
+                _ = interval.tick() => {
+                    if !buffer.is_empty() {
+                        flush_console_batch(&app_handle, &server_id, &mut buffer, &recent_lines);
+                    }
+                }
+                
+                // Канал закрыт
+                else => break,
+            }
+        }
+        
+        // Финальный flush при завершении
+        if !buffer.is_empty() {
+            flush_console_batch(&app_handle, &server_id, &mut buffer, &recent_lines);
+        }
+    });
+}
+
+// Flush батча строк в UI и cache
+fn flush_console_batch(
+    app_handle: &AppHandle,
+    server_id: &str,
+    buffer: &mut Vec<(Box<str>, u64)>,
+    recent_lines: &Arc<SyncRwLock<VecDeque<Box<str>>>>,
+) {
+    if buffer.is_empty() {
+        return;
+    }
+    
+    // Обновляем shared cache (минимальный lock scope)
+    {
+        let mut cache = recent_lines.write();
+        for (line, _) in buffer.iter() {
+            if cache.len() >= MAX_CONSOLE_LINES {
+                cache.pop_front();
+            }
+            cache.push_back(line.clone());
+        }
+    }
+    
+    // Отправляем батч в UI одним событием
+    let lines: Vec<String> = buffer.iter().map(|(line, _)| line.to_string()).collect();
+    let timestamps: Vec<u64> = buffer.iter().map(|(_, ts)| *ts).collect();
+    
+    let payload = ConsoleBatchPayload {
+        server_id: server_id.to_string(),
+        lines,
+        timestamps,
+    };
+    
+    let _ = app_handle.emit(CONSOLE_BATCH_EVENT, payload);
+    
+    // Очищаем буфер (reuse capacity)
+    buffer.clear();
 }
 
 fn spawn_process_watcher(
@@ -1598,13 +1724,18 @@ async fn start_server(
         .ok_or_else(|| String::from("Failed to capture server stderr"))?;
 
     let child_handle = Arc::new(AsyncMutex::new(child));
+    
+    // Создаём event streaming канал для консоли (уменьшенный размер для экономии памяти)
+    let (console_tx, console_rx) = mpsc::channel::<ConsoleEvent>(CONSOLE_CHANNEL_SIZE);
+    
+    let recent_lines = Arc::new(SyncRwLock::new(VecDeque::with_capacity(MAX_CONSOLE_LINES)));
+    
     let running_server = RunningServer {
         stdin: Arc::new(AsyncMutex::new(stdin)),
-        recent_lines: Arc::new(SyncRwLock::new(VecDeque::with_capacity(MAX_CONSOLE_LINES))),
+        console_tx: console_tx.clone(),
+        recent_lines: recent_lines.clone(),
     };
 
-    let recent_lines = running_server.recent_lines.clone();
-    
     {
         let mut running = state.running.lock().await;
         running.insert(server.id.clone(), running_server);
@@ -1612,8 +1743,15 @@ async fn start_server(
 
     let _ = set_server_running_flag(&state, &server.id, true).await;
 
-    spawn_console_reader(app_handle.clone(), server.id.clone(), stdout, recent_lines.clone());
-    spawn_console_reader(app_handle.clone(), server.id.clone(), stderr, recent_lines.clone());
+    let server_id_arc: Arc<str> = server.id.clone().into();
+    
+    // Запускаем readers (producers) - они только читают и отправляют события
+    spawn_console_reader(server_id_arc.clone(), stdout, console_tx.clone());
+    spawn_console_reader(server_id_arc.clone(), stderr, console_tx);
+    
+    // Запускаем processor (consumer) - единственный владелец cache
+    spawn_console_processor(app_handle.clone(), server.id.clone(), console_rx, recent_lines);
+    
     spawn_process_watcher(
         app_handle.clone(),
         state.inner().clone(),

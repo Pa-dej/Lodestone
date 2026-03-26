@@ -81,11 +81,47 @@ function appendConsoleLine(payload: ConsoleLine): void {
   updateConsoleLines(payload.server_id, clipped);
 }
 
+// Обработка батча строк консоли (оптимизация производительности)
+function appendConsoleBatch(payload: { server_id: string; lines: string[]; timestamps: number[] }): void {
+  const existing = serverState.consoleLines[payload.server_id] ?? [];
+  
+  // Преобразуем батч в entries
+  const newEntries: ConsoleEntry[] = [];
+  for (let i = 0; i < payload.lines.length; i++) {
+    const entry = toConsoleEntry({
+      server_id: payload.server_id,
+      line: payload.lines[i],
+      timestamp: payload.timestamps[i],
+    });
+    newEntries.push(entry);
+  }
+  
+  // Объединяем с существующими и обрезаем
+  const combined = [...existing, ...newEntries];
+  const clipped = combined.length > MAX_CONSOLE_LINES ? combined.slice(-MAX_CONSOLE_LINES) : combined;
+  updateConsoleLines(payload.server_id, clipped);
+}
+
 async function ensureEventListeners(): Promise<void> {
   if (!consoleUnlisten) {
-    consoleUnlisten = await listen<ConsoleLine>("console_line", ({ payload }) => {
+    // Слушаем батчи (основной канал, оптимизированный)
+    const batchUnlisten = await listen<{ server_id: string; lines: string[]; timestamps: number[] }>(
+      "console_batch",
+      ({ payload }) => {
+        appendConsoleBatch(payload);
+      }
+    );
+    
+    // Слушаем одиночные строки (fallback для совместимости)
+    const lineUnlisten = await listen<ConsoleLine>("console_line", ({ payload }) => {
       appendConsoleLine(payload);
     });
+    
+    // Сохраняем оба unlistener'а
+    consoleUnlisten = () => {
+      batchUnlisten();
+      lineUnlisten();
+    };
   }
 
   if (!downloadUnlisten) {
