@@ -46,6 +46,7 @@ export interface AppSettings {
   extra_jvm_flags: string;
   minimize_to_tray: boolean;
   autostart_servers: boolean;
+  kill_server_processes_on_exit: boolean;
 }
 
 export interface ServerPropertiesConfig {

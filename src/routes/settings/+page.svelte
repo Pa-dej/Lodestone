@@ -9,10 +9,7 @@
   } from "$lib/stores/servers.svelte";
   import { saveSettings, settingsState, updateSettings } from "$lib/stores/settings.svelte";
   import { i18nState, t } from "$lib/stores/i18n.svelte";
-  import type { ServerPropertyEntry } from "$lib/types";
-
-  const minRamMb = 1024;
-  const maxRamMb = 32768;
+  import type { AppSettings, ServerPropertyEntry } from "$lib/types";
 
   const defaultServerProperties: ServerPropertyEntry[] = [
     { key: "motd", value: "A Lodestone Minecraft Server" },
@@ -67,6 +64,11 @@
 
   async function onSaveSettings(): Promise<void> {
     await saveSettings();
+  }
+
+  function updateAndPersistSettings(patch: Partial<AppSettings>): void {
+    updateSettings(patch);
+    void saveSettings();
   }
 
   function findPropertyIndex(key: string): number {
@@ -233,55 +235,6 @@
   <div class="settings-grid">
     <section class="panel">
       <header class="panel-header">
-        <h2 class="panel-title">{t("settings_java")}</h2>
-      </header>
-      <div class="panel-body settings-form">
-        <label class="field">
-          <span class="field-label">{t("settings_java_path")}</span>
-          <input
-            class="input"
-            value={settingsState.settings.java_path}
-            oninput={(event) =>
-              updateSettings({ java_path: (event.currentTarget as HTMLInputElement).value })}
-          />
-        </label>
-
-        <label class="field">
-          <span class="field-label">{t("settings_max_ram")}</span>
-          <div class="slider-wrap">
-            <input
-              class="ram-slider"
-              type="range"
-              min={minRamMb}
-              max={maxRamMb}
-              step={512}
-              value={settingsState.settings.max_ram_mb}
-              oninput={(event) =>
-                updateSettings({
-                  max_ram_mb:
-                    Number.parseInt((event.currentTarget as HTMLInputElement).value, 10) ||
-                    settingsState.settings.max_ram_mb,
-                })}
-            />
-            <span class="tag">{settingsState.settings.max_ram_mb} MB</span>
-          </div>
-        </label>
-
-        <label class="field">
-          <span class="field-label">{t("settings_extra_jvm")}</span>
-          <input
-            class="input"
-            placeholder="-XX:+UseG1GC ..."
-            value={settingsState.settings.extra_jvm_flags}
-            oninput={(event) =>
-              updateSettings({ extra_jvm_flags: (event.currentTarget as HTMLInputElement).value })}
-          />
-        </label>
-      </div>
-    </section>
-
-    <section class="panel">
-      <header class="panel-header">
         <h2 class="panel-title">{t("settings_application")}</h2>
       </header>
       <div class="panel-body settings-form">
@@ -289,13 +242,19 @@
           label={t("settings_minimize_to_tray")}
           description={t("settings_minimize_to_tray_desc")}
           checked={settingsState.settings.minimize_to_tray}
-          onToggle={(value) => updateSettings({ minimize_to_tray: value })}
+          onToggle={(value) => updateAndPersistSettings({ minimize_to_tray: value })}
         />
         <Toggle
           label={t("settings_autostart_servers")}
           description={t("settings_autostart_servers_desc")}
           checked={settingsState.settings.autostart_servers}
-          onToggle={(value) => updateSettings({ autostart_servers: value })}
+          onToggle={(value) => updateAndPersistSettings({ autostart_servers: value })}
+        />
+        <Toggle
+          label={t("settings_kill_server_processes_on_exit")}
+          description={t("settings_kill_server_processes_on_exit_desc")}
+          checked={settingsState.settings.kill_server_processes_on_exit}
+          onToggle={(value) => updateAndPersistSettings({ kill_server_processes_on_exit: value })}
         />
       </div>
     </section>
@@ -551,7 +510,7 @@
 
   .settings-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
     gap: 12px;
   }
 
@@ -682,12 +641,6 @@
     display: flex;
     justify-content: flex-end;
     gap: 8px;
-  }
-
-  @media (max-width: 1100px) {
-    .settings-grid {
-      grid-template-columns: 1fr;
-    }
   }
 
   @media (max-width: 860px) {

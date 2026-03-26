@@ -207,12 +207,15 @@ impl Default for ServerPropertiesConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     java_path: String,
     max_ram_mb: u32,
     extra_jvm_flags: String,
     minimize_to_tray: bool,
     autostart_servers: bool,
+    #[serde(default)]
+    kill_server_processes_on_exit: bool,
 }
 
 impl Default for AppSettings {
@@ -223,6 +226,7 @@ impl Default for AppSettings {
             extra_jvm_flags: String::new(),
             minimize_to_tray: false,
             autostart_servers: false,
+            kill_server_processes_on_exit: false,
         }
     }
 }
@@ -267,6 +271,7 @@ struct RunningServer {
 struct AppState {
     running: Arc<AsyncMutex<HashMap<String, RunningServer>>>,
     servers_cache: Arc<SyncRwLock<Option<Vec<ServerConfig>>>>, // Кэш серверов в памяти
+    tracked_server_pids: Arc<SyncRwLock<HashMap<String, u32>>>,
 }
 
 fn now_timestamp_secs() -> u64 {
@@ -450,6 +455,95 @@ fn load_settings_from_disk_sync() -> AppSettings {
 
 fn should_minimize_to_tray_on_close() -> bool {
     load_settings_from_disk_sync().minimize_to_tray
+}
+
+fn should_kill_server_processes_on_exit() -> bool {
+    load_settings_from_disk_sync().kill_server_processes_on_exit
+}
+
+fn remember_server_pid(state: &AppState, server_id: &str, pid: u32) {
+    if pid == 0 || pid == std::process::id() {
+        return;
+    }
+
+    let mut tracked = state.tracked_server_pids.write();
+    tracked.insert(server_id.to_string(), pid);
+}
+
+fn forget_server_pid(state: &AppState, server_id: &str) {
+    let mut tracked = state.tracked_server_pids.write();
+    tracked.remove(server_id);
+}
+
+fn tracked_server_pids_snapshot(state: &AppState) -> Vec<(String, u32)> {
+    let tracked = state.tracked_server_pids.read();
+    tracked
+        .iter()
+        .map(|(server_id, pid)| (server_id.clone(), *pid))
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn terminate_process_by_pid(pid: u32) -> Result<(), String> {
+    if pid == 0 || pid == std::process::id() {
+        return Ok(());
+    }
+
+    let pid_value = pid.to_string();
+    let status = StdCommand::new("taskkill")
+        .args(["/PID", pid_value.as_str(), "/T", "/F"])
+        .status()
+        .map_err(|err| format!("Failed to execute taskkill for PID {pid}: {err}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("taskkill failed for PID {pid} with status {status}"))
+    }
+}
+
+#[cfg(unix)]
+fn terminate_process_by_pid(pid: u32) -> Result<(), String> {
+    if pid == 0 || pid == std::process::id() {
+        return Ok(());
+    }
+
+    let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    if result == 0 {
+        return Ok(());
+    }
+
+    let err = std::io::Error::last_os_error();
+    if err.kind() == ErrorKind::NotFound {
+        Ok(())
+    } else {
+        Err(format!("Failed to terminate PID {pid}: {err}"))
+    }
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn terminate_process_by_pid(pid: u32) -> Result<(), String> {
+    let _ = pid;
+    Err(String::from(
+        "Killing processes by PID is not supported on this platform",
+    ))
+}
+
+fn kill_tracked_server_processes_if_needed(state: &AppState) {
+    if !should_kill_server_processes_on_exit() {
+        return;
+    }
+
+    let tracked = tracked_server_pids_snapshot(state);
+    for (server_id, pid) in tracked {
+        if let Err(err) = terminate_process_by_pid(pid) {
+            eprintln!(
+                "[lodestone] failed to terminate tracked server process {server_id} (pid {pid}): {err}"
+            );
+        }
+    }
+
+    state.tracked_server_pids.write().clear();
 }
 
 fn java_exec(settings: &AppSettings) -> String {
@@ -1825,6 +1919,7 @@ fn spawn_process_watcher(
             let mut running = state.running.lock().await;
             running.remove(&server_id);
         }
+        forget_server_pid(&state, &server_id);
         let _ = set_server_running_flag(&state, &server_id, false).await;
 
         match status_result {
@@ -2227,6 +2322,7 @@ async fn start_server(
     let mut child = command
         .spawn()
         .map_err(|err| format!("Failed to start server process: {err}"))?;
+    let child_pid = child.id();
 
     #[cfg(unix)]
     let pty_master = Arc::new(pty_master);
@@ -2250,6 +2346,10 @@ async fn start_server(
         .ok_or_else(|| String::from("Failed to capture server stderr"))?;
 
     let child_handle = Arc::new(AsyncMutex::new(child));
+
+    if let Some(pid) = child_pid {
+        remember_server_pid(state.inner(), &server.id, pid);
+    }
     
     // Создаём event streaming канал для консоли
     let (console_tx, console_rx) = mpsc::channel::<ConsoleEvent>(CONSOLE_CHANNEL_SIZE);
@@ -2981,6 +3081,8 @@ pub fn run() {
                         }
                     }
                     "quit" => {
+                        let state = app.state::<AppState>();
+                        kill_tracked_server_processes_if_needed(state.inner());
                         app_handle.exit(0);
                     }
                     _ => {}
@@ -2994,6 +3096,9 @@ pub fn run() {
                 if should_minimize_to_tray_on_close() {
                     api.prevent_close();
                     let _ = window.hide();
+                } else if window.label() == "main" {
+                    let state = window.state::<AppState>();
+                    kill_tracked_server_processes_if_needed(state.inner());
                 }
             }
         })

@@ -81,6 +81,9 @@ const messages = {
     settings_minimize_to_tray_desc: "При закрытии окна приложение остаётся в системном трее.",
     settings_autostart_servers: "Автозапуск серверов",
     settings_autostart_servers_desc: "Запускать активные серверы сразу после старта приложения.",
+    settings_kill_server_processes_on_exit: "Завершать процессы серверов при выходе",
+    settings_kill_server_processes_on_exit_desc:
+      "При полном закрытии Lodestone принудительно завершать оставшиеся процессы серверов.",
     settings_server_profile: "Профиль сервера",
     settings_server_properties: "server.properties",
     settings_server_properties_desc: "Быстрые параметры и полный список ключей для выбранного сервера.",
@@ -187,6 +190,9 @@ const messages = {
     settings_minimize_to_tray_desc: "When closing window, app stays in the system tray.",
     settings_autostart_servers: "Autostart servers",
     settings_autostart_servers_desc: "Start active servers automatically on app startup.",
+    settings_kill_server_processes_on_exit: "Kill server processes on exit",
+    settings_kill_server_processes_on_exit_desc:
+      "Force-stop remaining server processes when Lodestone fully exits.",
     settings_server_profile: "Server profile",
     settings_server_properties: "server.properties",
     settings_server_properties_desc: "Quick controls and full key/value list for the selected server.",

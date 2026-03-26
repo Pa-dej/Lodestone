@@ -7,6 +7,7 @@ export const defaultSettings: AppSettings = {
   extra_jvm_flags: "",
   minimize_to_tray: false,
   autostart_servers: false,
+  kill_server_processes_on_exit: false,
 };
 
 interface SettingsStoreState {
