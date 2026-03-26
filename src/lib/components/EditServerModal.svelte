@@ -7,6 +7,7 @@
     name: string;
     port: number;
     ram_mb: number;
+    jvm_args: string;
   }
 
   interface Props {
@@ -21,6 +22,7 @@
   let name = $state("");
   let port = $state(25565);
   let ramMb = $state(2048);
+  let jvmArgs = $state("");
   let saving = $state(false);
   let modalError = $state<string | null>(null);
   let lastServerId = $state<string | null>(null);
@@ -29,6 +31,7 @@
     name = target.name;
     port = target.port;
     ramMb = target.ram_mb;
+    jvmArgs = target.jvm_args ?? "";
     modalError = null;
   }
 
@@ -70,6 +73,7 @@
         name: normalizedName,
         port,
         ram_mb: Math.round(ramMb),
+        jvm_args: jvmArgs.trim(),
       });
     } catch (error) {
       modalError = error instanceof Error ? error.message : String(error);
@@ -122,6 +126,11 @@
             <span class="tag">{ramMb} MB</span>
           </div>
         </div>
+
+        <label class="field">
+          <span class="field-label">{t("field_jvm_args")}</span>
+          <input class="input" bind:value={jvmArgs} placeholder="-XX:+UseG1GC -XX:+ParallelRefProcEnabled" />
+        </label>
       </div>
 
       {#if modalError}

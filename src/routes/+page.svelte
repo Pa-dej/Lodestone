@@ -74,6 +74,7 @@
     name: string;
     port: number;
     ram_mb: number;
+    jvm_args: string;
   }): Promise<void> {
     const updated = await updateServerProfile(payload);
     if (!updated) {

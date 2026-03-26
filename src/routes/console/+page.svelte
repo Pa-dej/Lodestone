@@ -6,8 +6,10 @@
   import PaperIcon from "../../icons/servers/Paper.svg?raw";
   import PurpurIcon from "../../icons/servers/Purpur.svg?raw";
   import FabricIcon from "../../icons/servers/Fabric.svg?raw";
+  import QuiltIcon from "../../icons/servers/Quilt.svg?raw";
   import ForgeIcon from "../../icons/servers/Forge.svg?raw";
   import FoliaIcon from "../../icons/servers/Folia.svg?raw";
+  import WaterfallIcon from "../../icons/servers/Waterfall.svg?raw";
   import VanillaIcon from "../../icons/Server.svg?raw";
   import {
     attachConsole,
@@ -30,8 +32,10 @@
     paper: { iconSvg: PaperIcon, color: "var(--core-paper)" },
     purpur: { iconSvg: PurpurIcon, color: "var(--core-purpur)" },
     fabric: { iconSvg: FabricIcon, color: "var(--core-fabric)" },
+    quilt: { iconSvg: QuiltIcon, color: "var(--core-quilt)" },
     forge: { iconSvg: ForgeIcon, color: "var(--core-forge)" },
     folia: { iconSvg: FoliaIcon, color: "var(--core-folia)" },
+    waterfall: { iconSvg: WaterfallIcon, color: "var(--core-waterfall)" },
     vanilla: { iconSvg: VanillaIcon, color: "var(--core-vanilla)" },
   };
 

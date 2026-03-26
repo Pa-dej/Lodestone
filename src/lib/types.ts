@@ -1,4 +1,12 @@
-export type CoreType = "paper" | "purpur" | "fabric" | "forge" | "folia" | "vanilla";
+export type CoreType =
+  | "paper"
+  | "purpur"
+  | "fabric"
+  | "quilt"
+  | "forge"
+  | "folia"
+  | "waterfall"
+  | "vanilla";
 
 export interface ServerConfig {
   id: string;
@@ -7,6 +15,7 @@ export interface ServerConfig {
   version: string;
   port: number;
   ram_mb: number;
+  jvm_args: string;
   path: string;
   running: boolean;
   online_players?: number;
@@ -19,6 +28,7 @@ export interface NewServerConfig {
   version: string;
   port: number;
   ram_mb: number;
+  jvm_args: string;
   properties: ServerPropertiesConfig;
 }
 
@@ -27,6 +37,7 @@ export interface UpdateServerProfileConfig {
   name: string;
   port: number;
   ram_mb: number;
+  jvm_args: string;
 }
 
 export interface AppSettings {

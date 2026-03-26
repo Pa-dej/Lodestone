@@ -14,7 +14,7 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -36,6 +36,7 @@ mod pty;
 const CONSOLE_EVENT: &str = "console_line";
 const CONSOLE_BATCH_EVENT: &str = "console_batch";
 const DOWNLOAD_PROGRESS_EVENT: &str = "download_progress";
+const VERSION_CACHE_TTL_SECS: u64 = 300;
 const MAX_CONSOLE_LINES: usize = 50;
 const CONSOLE_CHANNEL_SIZE: usize = 64; // Уменьшен для экономии памяти (было 1024)
 const BATCH_SIZE: usize = 8; // Очень маленький батч для мгновенного отклика
@@ -122,6 +123,9 @@ const EXTENDED_SERVER_COMMANDS: &[&str] = &[
     "plugman check",
 ];
 
+static VERSIONS_CACHE: OnceLock<SyncRwLock<HashMap<String, (Instant, Vec<String>)>>> =
+    OnceLock::new();
+
 // Event-driven архитектура: события консоли
 #[derive(Debug, Clone)]
 enum ConsoleEvent {
@@ -140,6 +144,8 @@ pub struct ServerConfig {
     version: String,
     port: u16,
     ram_mb: u32,
+    #[serde(default)]
+    jvm_args: String,
     path: PathBuf,
     running: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,6 +162,8 @@ pub struct NewServerConfig {
     port: u16,
     ram_mb: u32,
     #[serde(default)]
+    jvm_args: String,
+    #[serde(default)]
     properties: ServerPropertiesConfig,
 }
 
@@ -165,6 +173,8 @@ pub struct UpdateServerProfileConfig {
     name: String,
     port: u16,
     ram_mb: u32,
+    #[serde(default)]
+    jvm_args: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -610,6 +620,29 @@ fn sort_versions_desc(versions: &mut Vec<String>) {
     versions.dedup();
 }
 
+fn versions_cache() -> &'static SyncRwLock<HashMap<String, (Instant, Vec<String>)>> {
+    VERSIONS_CACHE.get_or_init(|| SyncRwLock::new(HashMap::new()))
+}
+
+fn get_cached_versions(core: &str) -> Option<Vec<String>> {
+    let cache = versions_cache().read();
+    let (cached_at, versions) = cache.get(core)?;
+    if cached_at.elapsed().as_secs() <= VERSION_CACHE_TTL_SECS {
+        Some(versions.clone())
+    } else {
+        None
+    }
+}
+
+fn put_cached_versions(core: &str, versions: &[String]) {
+    let mut cache = versions_cache().write();
+    cache.insert(core.to_string(), (Instant::now(), versions.to_vec()));
+}
+
+fn forge_supports_installer(mc_version: &str) -> bool {
+    compare_minecraft_versions(mc_version, "1.11") != Ordering::Less
+}
+
 fn extract_port_from_endpoint(endpoint: &str) -> Option<u16> {
     endpoint
         .rsplit_once(':')
@@ -854,7 +887,22 @@ async fn latest_fabric_installer_version(client: &Client) -> Result<String, Stri
         .ok_or_else(|| String::from("Failed to resolve Fabric installer version"))
 }
 
+async fn url_is_available(client: &Client, url: &str) -> Result<bool, String> {
+    let response = client
+        .head(url)
+        .send()
+        .await
+        .map_err(|err| format!("Failed to check download URL {url}: {err}"))?;
+    Ok(response.status().is_success())
+}
+
 async fn forge_installer_url(client: &Client, mc_version: &str) -> Result<String, String> {
+    if !forge_supports_installer(mc_version) {
+        return Err(format!(
+            "Forge for Minecraft {mc_version} is not supported by this launcher. Choose Minecraft 1.11+."
+        ));
+    }
+
     let promos = fetch_json(
         client,
         "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json",
@@ -869,15 +917,34 @@ async fn forge_installer_url(client: &Client, mc_version: &str) -> Result<String
     let latest_key = format!("{mc_version}-latest");
     let recommended_key = format!("{mc_version}-recommended");
 
-    let forge_version = promos_map
-        .get(&latest_key)
-        .or_else(|| promos_map.get(&recommended_key))
-        .and_then(Value::as_str)
-        .map(String::from)
-        .ok_or_else(|| format!("No Forge build metadata found for Minecraft {mc_version}"))?;
+    let mut seen = HashSet::<String>::new();
+    let mut candidates = Vec::<String>::new();
+    for key in [&latest_key, &recommended_key] {
+        if let Some(version) = promos_map.get(key).and_then(Value::as_str) {
+            let normalized = version.trim();
+            if !normalized.is_empty() && seen.insert(normalized.to_string()) {
+                candidates.push(normalized.to_string());
+            }
+        }
+    }
 
-    Ok(format!(
-        "https://maven.minecraftforge.net/net/minecraftforge/forge/{mc_version}-{forge_version}/forge-{mc_version}-{forge_version}-installer.jar"
+    if candidates.is_empty() {
+        return Err(format!(
+            "No Forge build metadata found for Minecraft {mc_version}"
+        ));
+    }
+
+    for forge_version in candidates {
+        let installer_url = format!(
+            "https://maven.minecraftforge.net/net/minecraftforge/forge/{mc_version}-{forge_version}/forge-{mc_version}-{forge_version}-installer.jar"
+        );
+        if url_is_available(client, &installer_url).await? {
+            return Ok(installer_url);
+        }
+    }
+
+    Err(format!(
+        "No downloadable Forge installer was found for Minecraft {mc_version}. Try a newer Forge version."
     ))
 }
 
@@ -946,6 +1013,15 @@ fn choose_generated_server_jar(server_dir: &Path, core: &str) -> Result<PathBuf,
         if core == "fabric" && name.contains("launch") {
             score += 100;
         }
+        if core == "quilt" && name.contains("quilt-server-launch") {
+            score += 300;
+        }
+        if core == "quilt" && name.contains("quilt") {
+            score += 200;
+        }
+        if core == "quilt" && name.contains("launch") {
+            score += 100;
+        }
         if core == "forge" && name.contains("shim") {
             score += 300;
         }
@@ -996,6 +1072,10 @@ fn sanitized_property_value(value: &str) -> String {
 
 fn sanitized_property_key(key: &str) -> String {
     key.replace(['\r', '\n', '='], "").trim().to_string()
+}
+
+fn sanitized_jvm_args(args: &str) -> String {
+    args.replace(['\r', '\n'], " ").trim().to_string()
 }
 
 fn sanitize_directory_name(name: &str) -> String {
@@ -1145,12 +1225,90 @@ async fn place_generated_server_jar(
     }
 }
 
+fn resolve_launch_jar_name(server_dir: &Path, core: &str) -> String {
+    if core == "quilt" {
+        let quilt_launcher = "quilt-server-launch.jar";
+        if server_dir.join(quilt_launcher).exists() {
+            return String::from(quilt_launcher);
+        }
+    }
+    String::from("server.jar")
+}
+
+async fn write_start_scripts(
+    server_dir: &Path,
+    settings: &AppSettings,
+    ram_mb: u32,
+    core: &str,
+    server_jvm_args: &str,
+) -> Result<(), String> {
+    let java = java_exec(settings);
+    let global_args = settings.extra_jvm_flags.trim();
+    let server_args = sanitized_jvm_args(server_jvm_args);
+
+    let mut merged_args = String::new();
+    if !global_args.is_empty() {
+        merged_args.push_str(global_args);
+    }
+    if !server_args.is_empty() {
+        if !merged_args.is_empty() {
+            merged_args.push(' ');
+        }
+        merged_args.push_str(&server_args);
+    }
+
+    let extra_segment = if merged_args.is_empty() {
+        String::new()
+    } else {
+        format!("{merged_args} ")
+    };
+    let launch_jar = resolve_launch_jar_name(server_dir, core);
+
+    #[cfg(target_os = "windows")]
+    {
+        let bat_body = format!(
+            "@echo off\r\n\"{java}\" -Xms{ram_mb}M -Xmx{ram_mb}M {extra_segment}-jar {launch_jar} nogui\r\npause\r\n"
+        );
+        let bat_path = server_dir.join("start.bat");
+        tokio_fs::write(&bat_path, bat_body)
+            .await
+            .map_err(|err| format!("Failed to write {}: {err}", bat_path.display()))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let sh_body = format!(
+            "#!/usr/bin/env sh\n\"{java}\" -Xms{ram_mb}M -Xmx{ram_mb}M {extra_segment}-jar {launch_jar} nogui\n"
+        );
+        let sh_path = server_dir.join("start.sh");
+        tokio_fs::write(&sh_path, sh_body)
+            .await
+            .map_err(|err| format!("Failed to write {}: {err}", sh_path.display()))?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o755);
+            fs::set_permissions(&sh_path, perms).map_err(|err| {
+                format!(
+                    "Failed to set executable permissions on {}: {err}",
+                    sh_path.display()
+                )
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
 async fn write_bootstrap_files(
     server_dir: &Path,
     settings: &AppSettings,
     ram_mb: u32,
+    core: &str,
     port: u16,
     properties: &ServerPropertiesConfig,
+    jvm_args: &str,
 ) -> Result<(), String> {
     let eula_path = server_dir.join("eula.txt");
     tokio_fs::write(&eula_path, "eula=true\n")
@@ -1185,47 +1343,7 @@ async fn write_bootstrap_files(
         .await
         .map_err(|err| format!("Failed to write {}: {err}", props_path.display()))?;
 
-    let java = java_exec(settings);
-    let extra = settings.extra_jvm_flags.trim();
-    let extra_segment = if extra.is_empty() {
-        String::new()
-    } else {
-        format!("{extra} ")
-    };
-
-    #[cfg(target_os = "windows")]
-    {
-        let bat_body = format!(
-            "@echo off\r\n\"{java}\" -Xms{ram_mb}M -Xmx{ram_mb}M {extra_segment}-jar server.jar nogui\r\npause\r\n"
-        );
-        let bat_path = server_dir.join("start.bat");
-        tokio_fs::write(&bat_path, bat_body)
-            .await
-            .map_err(|err| format!("Failed to write {}: {err}", bat_path.display()))?;
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let sh_body = format!(
-            "#!/usr/bin/env sh\n\"{java}\" -Xms{ram_mb}M -Xmx{ram_mb}M {extra_segment}-jar server.jar nogui\n"
-        );
-        let sh_path = server_dir.join("start.sh");
-        tokio_fs::write(&sh_path, sh_body)
-            .await
-            .map_err(|err| format!("Failed to write {}: {err}", sh_path.display()))?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = fs::Permissions::from_mode(0o755);
-            fs::set_permissions(&sh_path, perms).map_err(|err| {
-                format!(
-                    "Failed to set executable permissions on {}: {err}",
-                    sh_path.display()
-                )
-            })?;
-        }
-    }
+    write_start_scripts(server_dir, settings, ram_mb, core, jvm_args).await?;
 
     Ok(())
 }
@@ -1257,6 +1375,13 @@ async fn install_core_jar(
             let build = latest_paper_like_build(client, "folia", version).await?;
             let url = format!(
                 "https://api.papermc.io/v2/projects/folia/versions/{version}/builds/{build}/downloads/folia-{version}-{build}.jar"
+            );
+            download_to_path(client, &url, &server_jar_path, app_handle, server_id).await?;
+        }
+        "waterfall" => {
+            let build = latest_paper_like_build(client, "waterfall", version).await?;
+            let url = format!(
+                "https://api.papermc.io/v2/projects/waterfall/versions/{version}/builds/{build}/downloads/waterfall-{version}-{build}.jar"
             );
             download_to_path(client, &url, &server_jar_path, app_handle, server_id).await?;
         }
@@ -1312,6 +1437,60 @@ async fn install_core_jar(
 
             let generated_jar = choose_generated_server_jar(server_dir, "fabric")?;
             place_generated_server_jar(&generated_jar, &server_jar_path, "Fabric").await?;
+        }
+        "quilt" => {
+            let installer_url =
+                String::from("https://quiltmc.org/api/v1/download-latest-installer/java-universal");
+            let installer_path = server_dir.join("quilt-installer.jar");
+            download_to_path(
+                client,
+                &installer_url,
+                &installer_path,
+                app_handle,
+                server_id,
+            )
+            .await?;
+
+            emit_download_progress(
+                app_handle,
+                server_id,
+                "quilt-installer",
+                0,
+                0,
+                95.0,
+                0.0,
+                false,
+            );
+
+            let installer_file_name = installer_path
+                .file_name()
+                .and_then(OsStr::to_str)
+                .map(String::from)
+                .ok_or_else(|| String::from("Quilt installer path is invalid"))?;
+
+            run_java_command(
+                settings,
+                server_dir,
+                &[
+                    String::from("-jar"),
+                    installer_file_name,
+                    String::from("install"),
+                    String::from("server"),
+                    String::from(version),
+                    String::from("--download-server"),
+                    String::from("--create-scripts"),
+                    format!("--install-dir={}", server_dir.display()),
+                ],
+            )
+            .await?;
+
+            let launcher_path = server_dir.join("quilt-server-launch.jar");
+            if !launcher_path.exists() {
+                return Err(format!(
+                    "Quilt installation did not create {}",
+                    launcher_path.display()
+                ));
+            }
         }
         "forge" => {
             let installer_url = forge_installer_url(client, version).await?;
@@ -1854,7 +2033,16 @@ async fn create_server(
     ensure_app_dirs().await?;
 
     let core = normalize_core(&config.core);
-    let supported = ["paper", "purpur", "fabric", "forge", "folia", "vanilla"];
+    let supported = [
+        "paper",
+        "purpur",
+        "fabric",
+        "quilt",
+        "forge",
+        "folia",
+        "waterfall",
+        "vanilla",
+    ];
     if !supported.contains(&core.as_str()) {
         return Err(format!("Unsupported core: {}", config.core));
     }
@@ -1914,8 +2102,10 @@ async fn create_server(
         &server_dir,
         &settings,
         config.ram_mb,
+        &core,
         config.port,
         &config.properties,
+        &config.jvm_args,
     )
     .await?;
 
@@ -1926,6 +2116,7 @@ async fn create_server(
         version: String::from(version),
         port: config.port,
         ram_mb: config.ram_mb,
+        jvm_args: sanitized_jvm_args(&config.jvm_args),
         path: server_dir,
         running: false,
         online_players: None,
@@ -1975,6 +2166,7 @@ async fn start_server(
     let ram_limit = settings.max_ram_mb.max(256);
     let ram_mb = server.ram_mb.min(ram_limit);
     let extra_flags = split_jvm_flags(&settings.extra_jvm_flags);
+    let profile_flags = split_jvm_flags(&server.jvm_args);
 
     let mut command = Command::new(java);
     command
@@ -1996,8 +2188,12 @@ async fn start_server(
     for flag in extra_flags {
         command.arg(flag);
     }
+    for flag in profile_flags {
+        command.arg(flag);
+    }
 
-    command.arg("-jar").arg("server.jar").arg("nogui");
+    let launch_jar = resolve_launch_jar_name(&server.path, &server.core);
+    command.arg("-jar").arg(launch_jar).arg("nogui");
 
     #[cfg(unix)]
     let (pty_master, slave_fd) = crate::pty::PtyMaster::open()
@@ -2181,11 +2377,21 @@ async fn update_server_profile(
     servers[index].name = normalized_name;
     servers[index].port = config.port;
     servers[index].ram_mb = normalized_ram;
+    servers[index].jvm_args = sanitized_jvm_args(&config.jvm_args);
     servers[index].running = running_now;
 
     let updated = servers[index].clone();
 
     upsert_server_property(&updated.path, "server-port", &updated.port.to_string()).await?;
+    let settings = load_settings_from_disk().await.unwrap_or_default();
+    write_start_scripts(
+        &updated.path,
+        &settings,
+        updated.ram_mb,
+        &updated.core,
+        &updated.jvm_args,
+    )
+    .await?;
     save_servers_to_disk(&servers, Some(&state)).await?;
 
     Ok(updated)
@@ -2609,8 +2815,12 @@ async fn fetch_versions(core: String) -> Result<Vec<String>, String> {
         .map_err(|err| format!("Failed to initialize HTTP client: {err}"))?;
 
     let core = normalize_core(&core);
+    if let Some(cached) = get_cached_versions(&core) {
+        return Ok(cached);
+    }
+
     let mut versions = match core.as_str() {
-        "paper" | "folia" => {
+        "paper" | "folia" | "waterfall" => {
             let url = format!("https://api.papermc.io/v2/projects/{core}");
             let json = fetch_json(&client, &url).await?;
             json.get("versions")
@@ -2641,14 +2851,52 @@ async fn fetch_versions(core: String) -> Result<Vec<String>, String> {
                 .and_then(Value::as_array)
                 .ok_or_else(|| String::from("Invalid vanilla versions response"))?
                 .iter()
+                .filter(|entry| {
+                    entry
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .is_some_and(|kind| kind == "release" || kind == "snapshot")
+                })
                 .filter_map(|entry| entry.get("id").and_then(Value::as_str))
                 .map(String::from)
                 .collect::<Vec<_>>()
         }
         "fabric" => {
-            let json = fetch_json(&client, "https://meta.fabricmc.net/v2/versions/game").await?;
+            match fetch_json(&client, "https://meta.fabricmc.net/v2/versions/game").await {
+                Ok(json) => json
+                    .as_array()
+                    .ok_or_else(|| String::from("Invalid Fabric versions response"))?
+                    .iter()
+                    .filter_map(|entry| entry.get("version").and_then(Value::as_str))
+                    .map(String::from)
+                    .collect::<Vec<_>>(),
+                Err(_) => {
+                    let manifest = fetch_json(
+                        &client,
+                        "https://launchermeta.mojang.com/mc/game/version_manifest.json",
+                    )
+                    .await?;
+                    manifest
+                        .get("versions")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| String::from("Invalid fallback Fabric versions response"))?
+                        .iter()
+                        .filter(|entry| {
+                            entry
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .is_some_and(|kind| kind == "release" || kind == "snapshot")
+                        })
+                        .filter_map(|entry| entry.get("id").and_then(Value::as_str))
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                }
+            }
+        }
+        "quilt" => {
+            let json = fetch_json(&client, "https://meta.quiltmc.org/v3/versions/game").await?;
             json.as_array()
-                .ok_or_else(|| String::from("Invalid Fabric versions response"))?
+                .ok_or_else(|| String::from("Invalid Quilt versions response"))?
                 .iter()
                 .filter_map(|entry| entry.get("version").and_then(Value::as_str))
                 .map(String::from)
@@ -2666,14 +2914,18 @@ async fn fetch_versions(core: String) -> Result<Vec<String>, String> {
                 .ok_or_else(|| String::from("Invalid Forge versions response"))?;
             promos
                 .keys()
-                .filter_map(|key| key.split('-').next())
-                .map(String::from)
+                .filter_map(|key| key.rsplit_once('-').map(|(version, _)| version))
+                .filter(|version| forge_supports_installer(version))
+                .map(str::to_string)
                 .collect::<Vec<_>>()
         }
         _ => return Err(format!("Unsupported core: {core}")),
     };
 
     sort_versions_desc(&mut versions);
+    if !versions.is_empty() {
+        put_cached_versions(&core, &versions);
+    }
     Ok(versions)
 }
 

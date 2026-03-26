@@ -7,8 +7,10 @@
   import PaperIcon from "../../icons/servers/Paper.svg?raw";
   import PurpurIcon from "../../icons/servers/Purpur.svg?raw";
   import FabricIcon from "../../icons/servers/Fabric.svg?raw";
+  import QuiltIcon from "../../icons/servers/Quilt.svg?raw";
   import ForgeIcon from "../../icons/servers/Forge.svg?raw";
   import FoliaIcon from "../../icons/servers/Folia.svg?raw";
+  import WaterfallIcon from "../../icons/servers/Waterfall.svg?raw";
   import VanillaIcon from "../../icons/Server.svg?raw";
 
   interface CoreOption {
@@ -54,6 +56,14 @@
       description: i18nState.language === "ru" ? "Лёгкий загрузчик модов" : "Lightweight mod loader",
     },
     {
+      id: "quilt",
+      iconSvg: QuiltIcon,
+      color: "var(--core-quilt)",
+      name: "Quilt",
+      description:
+        i18nState.language === "ru" ? "Современный загрузчик модов" : "Modern mod loader",
+    },
+    {
       id: "forge",
       iconSvg: ForgeIcon,
       color: "var(--core-forge)",
@@ -66,6 +76,16 @@
       color: "var(--core-folia)",
       name: "Folia",
       description: i18nState.language === "ru" ? "Многопоточный форк Paper" : "Multithreaded Paper fork",
+    },
+    {
+      id: "waterfall",
+      iconSvg: WaterfallIcon,
+      color: "var(--core-waterfall)",
+      name: "Waterfall",
+      description:
+        i18nState.language === "ru"
+          ? "Bungee-прокси (deprecated)"
+          : "Bungee proxy (deprecated)",
     },
     {
       id: "vanilla",
@@ -81,8 +101,10 @@
   let serverName = $state("my-server");
   let versions = $state<string[]>([]);
   let selectedVersion = $state("");
+  let releaseOnly = $state(true);
   let port = $state(25565);
   let ramMb = $state(2048);
+  let jvmArgs = $state("");
   let motd = $state("A Lodestone Minecraft Server");
   let gamemode = $state<"survival" | "creative" | "adventure" | "spectator">("survival");
   let difficulty = $state<"peaceful" | "easy" | "normal" | "hard">("normal");
@@ -95,15 +117,37 @@
   let failed = $state(false);
   let creationStarted = $state(false);
   let previousOpen = false;
+  let versionsRequestId = 0;
+  const VERSION_FETCH_TIMEOUT_MS = 45000;
+
+  const releaseVersionPattern = /^(?:\d+\.\d+(?:\.\d+){0,2}|\d{2}\.\d{2}(?:\.\d+)?)$/;
+
+  function isReleaseVersion(version: string): boolean {
+    const normalized = version.trim().toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    if (normalized.includes("snapshot") || normalized.includes("pre") || normalized.includes("rc")) {
+      return false;
+    }
+    return releaseVersionPattern.test(normalized);
+  }
+
+  const visibleVersions = $derived.by(() => {
+    if (!releaseOnly) {
+      return versions;
+    }
+    return versions.filter((version) => isReleaseVersion(version));
+  });
 
   const versionOptions = $derived.by(() => {
     if (loadingVersions) {
       return [{ value: "", label: t("modal_loading_versions"), disabled: true }];
     }
-    if (versions.length === 0) {
+    if (visibleVersions.length === 0) {
       return [{ value: "", label: t("modal_no_versions"), disabled: true }];
     }
-    return versions.map((version) => ({ value: version, label: version }));
+    return visibleVersions.map((version) => ({ value: version, label: version }));
   });
 
   const gamemodeOptions = $derived([
@@ -142,20 +186,37 @@
     return `${speed.toFixed(2)} MB/s`;
   });
 
+  const showWaterfallWarning = $derived(selectedCore === "waterfall");
+
+  async function fetchVersionsWithTimeout(core: CoreType): Promise<string[]> {
+    const request = fetchVersions(core).catch(() => []);
+    const timeout = new Promise<string[]>((resolve) => {
+      setTimeout(() => resolve([]), VERSION_FETCH_TIMEOUT_MS);
+    });
+    return Promise.race([request, timeout]);
+  }
+
   async function loadVersionsForCore(core: CoreType): Promise<void> {
+    const requestId = ++versionsRequestId;
     loadingVersions = true;
     modalError = null;
     versions = [];
     selectedVersion = "";
     try {
-      const result = await fetchVersions(core);
+      const result = await fetchVersionsWithTimeout(core);
+      if (requestId !== versionsRequestId) {
+        return;
+      }
       versions = result;
-      selectedVersion = result[0] ?? "";
+      const filtered = releaseOnly ? result.filter((version) => isReleaseVersion(version)) : result;
+      selectedVersion = filtered[0] ?? "";
       if (!selectedVersion) {
         modalError = t("modal_no_versions");
       }
     } finally {
-      loadingVersions = false;
+      if (requestId === versionsRequestId) {
+        loadingVersions = false;
+      }
     }
   }
 
@@ -183,8 +244,10 @@
     serverName = "my-server";
     versions = [];
     selectedVersion = "";
+    releaseOnly = true;
     port = 25565;
     ramMb = 2048;
+    jvmArgs = "";
     motd = "A Lodestone Minecraft Server";
     gamemode = "survival";
     difficulty = "normal";
@@ -196,6 +259,7 @@
     finished = false;
     failed = false;
     creationStarted = false;
+    versionsRequestId += 1;
   }
 
   async function submitCreation(): Promise<void> {
@@ -215,6 +279,7 @@
       version: selectedVersion,
       port,
       ram_mb: ramMb,
+      jvm_args: jvmArgs.trim(),
       properties: {
         motd: motd.trim() || "A Lodestone Minecraft Server",
         gamemode,
@@ -251,6 +316,26 @@
       resetState();
     }
     previousOpen = open;
+  });
+
+  $effect(() => {
+    if (!open || currentStep !== 1 || loadingVersions) {
+      return;
+    }
+
+    if (visibleVersions.length === 0) {
+      selectedVersion = "";
+      modalError = t("modal_no_versions");
+      return;
+    }
+
+    if (!selectedVersion || !visibleVersions.includes(selectedVersion)) {
+      selectedVersion = visibleVersions[0] ?? "";
+    }
+
+    if (modalError === t("modal_no_versions")) {
+      modalError = null;
+    }
   });
 </script>
 
@@ -300,16 +385,32 @@
           </label>
 
           <div class="field">
-            <span class="field-label">{t("field_version")}</span>
+            <div class="field-label-row">
+              <span class="field-label">{t("field_version")}</span>
+              <label class="release-only">
+                <input type="checkbox" bind:checked={releaseOnly} />
+                <span>{t("field_release_only")}</span>
+              </label>
+            </div>
             <CustomSelect
               value={selectedVersion}
               options={versionOptions}
-              disabled={loadingVersions || versions.length === 0}
+              disabled={loadingVersions || visibleVersions.length === 0}
               onChange={(value) => {
                 selectedVersion = value;
               }}
             />
           </div>
+
+          {#if showWaterfallWarning}
+            <div class="alert alert-warning span-2">
+              <span class="alert-icon">⚠</span>
+              <div class="alert-text">
+                <div class="alert-title">{t("waterfall_deprecated_title")}</div>
+                <div class="alert-sub">{t("waterfall_deprecated_text")}</div>
+              </div>
+            </div>
+          {/if}
 
           <label class="field">
             <span class="field-label">{t("field_port")}</span>
@@ -323,6 +424,11 @@
               <span class="tag">{ramMb} MB</span>
             </div>
           </div>
+
+          <label class="field span-2">
+            <span class="field-label">{t("field_jvm_args")}</span>
+            <input class="input" bind:value={jvmArgs} placeholder="-XX:+UseG1GC -XX:+ParallelRefProcEnabled" />
+          </label>
 
           <label class="field span-2">
             <span class="field-label">{t("field_motd")}</span>
@@ -401,7 +507,24 @@
             {:else if failed}
               ✕
             {:else}
-              ⭳
+              <svg
+                class="download-svg"
+                width="36"
+                height="36"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <g class="arrow">
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                  <polyline points="8,11 12,15 16,11" />
+                </g>
+              </svg>
             {/if}
           </div>
 
@@ -569,6 +692,26 @@
     gap: 6px;
   }
 
+  .field-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .release-only {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+    user-select: none;
+  }
+
+  .release-only input {
+    accent-color: var(--accent);
+  }
+
   .span-2 {
     grid-column: span 2;
   }
@@ -614,6 +757,48 @@
     place-items: center;
     font-size: 28px;
     color: var(--accent);
+  }
+
+  .download-svg {
+    width: 36px;
+    height: 36px;
+    display: block;
+  }
+
+  .download-svg .arrow {
+    animation: teleport 2s cubic-bezier(.65, 0, .35, 1) infinite;
+    transform-origin: 12px 9px;
+  }
+
+  @keyframes teleport {
+    0% {
+      transform: translateY(0) scaleY(1) scaleX(1);
+      opacity: 1;
+    }
+    30% {
+      transform: translateY(5px) scaleY(.3) scaleX(.6);
+      opacity: 0;
+    }
+    31% {
+      transform: translateY(-7px) scaleY(.2) scaleX(.5);
+      opacity: 0;
+    }
+    55% {
+      transform: translateY(0) scaleY(1.1) scaleX(.95);
+      opacity: 1;
+    }
+    65% {
+      transform: translateY(1px) scaleY(.95) scaleX(1.02);
+      opacity: 1;
+    }
+    75% {
+      transform: translateY(0) scaleY(1) scaleX(1);
+      opacity: 1;
+    }
+    100% {
+      transform: translateY(0) scaleY(1) scaleX(1);
+      opacity: 1;
+    }
   }
 
   .download-text h3 {

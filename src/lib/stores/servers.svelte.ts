@@ -46,6 +46,39 @@ const FALLBACK_SERVER_COMMANDS = [
   "reload",
   "restart",
 ];
+const FABRIC_EMERGENCY_VERSIONS = [
+  "1.21.11",
+  "1.21.10",
+  "1.21.9",
+  "1.21.8",
+  "1.21.7",
+  "1.21.6",
+  "1.21.5",
+  "1.21.4",
+  "1.21.3",
+  "1.21.2",
+  "1.21.1",
+  "1.21",
+  "1.20.6",
+  "1.20.5",
+  "1.20.4",
+  "1.20.3",
+  "1.20.2",
+  "1.20.1",
+  "1.20",
+  "1.19.4",
+  "1.19.3",
+  "1.19.2",
+  "1.19.1",
+  "1.19",
+  "1.18.2",
+  "1.18.1",
+  "1.18",
+  "1.17.1",
+  "1.17",
+  "1.16.5",
+] as const;
+const VERSION_DEBUG_PREFIX = "[lodestone:versions]";
 
 export const serverState = $state<ServerStoreState>({
   servers: [],
@@ -67,9 +100,122 @@ export const serverState = $state<ServerStoreState>({
 let consoleUnlisten: UnlistenFn | null = null;
 let downloadUnlisten: UnlistenFn | null = null;
 let pollHandle: ReturnType<typeof setInterval> | null = null;
+const versionsCache: Partial<Record<CoreType, string[]>> = {};
 
 function setServerError(error: unknown): void {
   serverState.error = error instanceof Error ? error.message : String(error);
+}
+
+function versionErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}`;
+  }
+  return String(error);
+}
+
+function dedupeAndSortVersions(versions: string[]): string[] {
+  return [...new Set(versions)].sort((a, b) =>
+    b.localeCompare(a, undefined, { numeric: true, sensitivity: "base" }),
+  );
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} for ${url}`);
+  }
+  return (await response.json()) as T;
+}
+
+async function fetchFabricVersionsDirect(): Promise<string[]> {
+  console.debug(`${VERSION_DEBUG_PREFIX} Fabric fallback: try direct Fabric API`);
+  try {
+    const fabric = await fetchJson<Array<{ version?: string }>>(
+      "https://meta.fabricmc.net/v2/versions/game",
+    );
+    const versions = fabric
+      .map((entry) => entry.version?.trim() ?? "")
+      .filter((entry) => entry.length > 0);
+    if (versions.length > 0) {
+      console.debug(
+        `${VERSION_DEBUG_PREFIX} Fabric fallback: Fabric API returned ${versions.length} versions`,
+      );
+      return dedupeAndSortVersions(versions);
+    }
+    console.warn(`${VERSION_DEBUG_PREFIX} Fabric fallback: Fabric API returned empty list`);
+  } catch (error) {
+    console.warn(
+      `${VERSION_DEBUG_PREFIX} Fabric fallback: Fabric API failed, switching to Mojang manifest`,
+      error,
+    );
+  }
+
+  console.debug(`${VERSION_DEBUG_PREFIX} Fabric fallback: try Mojang manifest`);
+  const manifest = await fetchJson<{ versions?: Array<{ id?: string; type?: string }> }>(
+    "https://launchermeta.mojang.com/mc/game/version_manifest.json",
+  );
+  const versions = (manifest.versions ?? [])
+    .filter((entry) => entry.type === "release" || entry.type === "snapshot")
+    .map((entry) => entry.id?.trim() ?? "")
+    .filter((entry) => entry.length > 0);
+
+  console.debug(
+    `${VERSION_DEBUG_PREFIX} Fabric fallback: Mojang manifest returned ${versions.length} versions`,
+  );
+  return dedupeAndSortVersions(versions);
+}
+
+async function invokeVersionsWithRetry(core: CoreType, attempts = 6): Promise<string[]> {
+  console.debug(`${VERSION_DEBUG_PREFIX} Start fetch_versions for core=${core}, attempts=${attempts}`);
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    console.debug(`${VERSION_DEBUG_PREFIX} IPC attempt ${attempt}/${attempts} for core=${core}`);
+    try {
+      const versions = await invoke<string[]>("fetch_versions", { core });
+      console.debug(
+        `${VERSION_DEBUG_PREFIX} IPC success for core=${core} on attempt=${attempt}, versions=${versions.length}`,
+      );
+      return versions;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `${VERSION_DEBUG_PREFIX} IPC failed for core=${core} on attempt=${attempt}: ${versionErrorMessage(error)}`,
+        error,
+      );
+      if (attempt < attempts) {
+        const delayMs = Math.min(200 * 2 ** (attempt - 1), 2000);
+        console.debug(
+          `${VERSION_DEBUG_PREFIX} Waiting ${delayMs}ms before next attempt for core=${core}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  if (core === "fabric") {
+    console.warn(
+      `${VERSION_DEBUG_PREFIX} All IPC attempts exhausted for Fabric. Switching to direct HTTP fallback.`,
+    );
+    try {
+      const versions = await fetchFabricVersionsDirect();
+      console.debug(
+        `${VERSION_DEBUG_PREFIX} Fabric HTTP fallback success, versions=${versions.length}`,
+      );
+      return versions;
+    } catch (error) {
+      console.error(
+        `${VERSION_DEBUG_PREFIX} Fabric HTTP fallback failed. Using emergency versions list.`,
+        error,
+      );
+      return [...FABRIC_EMERGENCY_VERSIONS];
+    }
+  }
+
+  console.error(
+    `${VERSION_DEBUG_PREFIX} fetch_versions failed for core=${core} after ${attempts} attempts`,
+    lastError,
+  );
+  throw lastError ?? new Error("Failed to fetch versions");
 }
 
 function shouldInvalidateServerCommandsCache(command: string): boolean {
@@ -420,9 +566,23 @@ export function clearServerCommandsCache(id?: string): void {
 }
 
 export async function fetchVersions(core: CoreType): Promise<string[]> {
+  const cached = versionsCache[core];
+  if (cached && cached.length > 0) {
+    console.debug(`${VERSION_DEBUG_PREFIX} cache hit for core=${core}, versions=${cached.length}`);
+    return cached;
+  }
+
+  console.debug(`${VERSION_DEBUG_PREFIX} cache miss for core=${core}`);
   try {
-    return await invoke<string[]>("fetch_versions", { core });
+    const versions = await invokeVersionsWithRetry(core);
+    console.debug(`${VERSION_DEBUG_PREFIX} fetch completed for core=${core}, versions=${versions.length}`);
+    if (versions.length > 0) {
+      versionsCache[core] = versions;
+      console.debug(`${VERSION_DEBUG_PREFIX} cache store for core=${core}, versions=${versions.length}`);
+    }
+    return versions;
   } catch (error) {
+    console.error(`${VERSION_DEBUG_PREFIX} final failure for core=${core}`, error);
     setServerError(error);
     return [];
   }
