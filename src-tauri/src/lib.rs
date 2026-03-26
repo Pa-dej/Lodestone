@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 const CONSOLE_EVENT: &str = "console_line";
 const DOWNLOAD_PROGRESS_EVENT: &str = "download_progress";
+const MAX_CONSOLE_LINES: usize = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -127,7 +128,7 @@ struct DownloadProgressPayload {
 #[derive(Clone)]
 struct RunningServer {
     stdin: Arc<AsyncMutex<ChildStdin>>,
-    recent_lines: Arc<SyncRwLock<VecDeque<String>>>, // Кэш последних строк консоли (VecDeque для O(1) операций)
+    recent_lines: Arc<SyncRwLock<VecDeque<Box<str>>>>, // Box<str> вместо String для меньшего потребления памяти
 }
 
 #[derive(Clone, Default)]
@@ -1190,7 +1191,7 @@ fn spawn_console_reader<R>(
     app_handle: AppHandle, 
     server_id: String, 
     reader: R,
-    recent_lines: Arc<SyncRwLock<VecDeque<String>>>,
+    recent_lines: Arc<SyncRwLock<VecDeque<Box<str>>>>,
 )
 where
     R: AsyncRead + Send + Unpin + 'static,
@@ -1199,15 +1200,15 @@ where
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(raw_line)) = lines.next_line().await {
             let stripped = strip_ansi_escapes::strip(raw_line.as_bytes());
-            let normalized = String::from_utf8_lossy(&stripped);
+            let normalized = String::from_utf8_lossy(&stripped).into_owned();
             
-            // Сохраняем строку в кэш (последние 50 строк) - O(1) операции с VecDeque
+            // Сохраняем строку в кэш (последние MAX_CONSOLE_LINES строк) - O(1) операции с VecDeque
             {
                 let mut cache = recent_lines.write();
-                if cache.len() >= 50 {
+                if cache.len() >= MAX_CONSOLE_LINES {
                     cache.pop_front(); // O(1) вместо remove(0)
                 }
-                cache.push_back(normalized.to_string()); // Только одна аллокация
+                cache.push_back(normalized.clone().into_boxed_str()); // Box<str> для меньшего потребления памяти
             }
             
             emit_console_line(&app_handle, &server_id, &normalized);
@@ -1308,7 +1309,7 @@ async fn get_server_stats_internal(
     let max_players = get_max_players_from_properties(state.inner(), id).await.unwrap_or(20);
 
     // Получаем количество игроков из консоли (не отправляя команды)
-    match get_online_players_count(&server, id).await {
+    match get_online_players_count(&server, id) {
         Ok(online_count) => {
             // Всегда возвращаем данные, даже если игроков 0
             // UI сам решит показывать ли блок статистики
@@ -1322,7 +1323,7 @@ async fn get_server_stats_internal(
 }
 
 // Функция для получения количества онлайн игроков
-async fn get_online_players_count(
+fn get_online_players_count(
     server: &RunningServer,
     _server_id: &str,
 ) -> Result<u32, String> {
@@ -1330,15 +1331,13 @@ async fn get_online_players_count(
     // Команда list уже отправляется сервером автоматически или пользователем
     
     // Парсим последние строки консоли для поиска ответа на команду list
-    {
-        let recent_lines = server.recent_lines.read();
-        
-        // Ищем в последних 20 строках любые упоминания количества игроков
-        let start_idx = recent_lines.len().saturating_sub(20);
-        for line in recent_lines.iter().skip(start_idx).rev() {
-            if let Some(count) = parse_player_count_from_line(line) {
-                return Ok(count);
-            }
+    let recent_lines = server.recent_lines.read();
+    
+    // Ищем в последних 20 строках любые упоминания количества игроков
+    let start_idx = recent_lines.len().saturating_sub(20);
+    for line in recent_lines.iter().skip(start_idx).rev() {
+        if let Some(count) = parse_player_count_from_line(line) {
+            return Ok(count);
         }
     }
 
@@ -1595,7 +1594,7 @@ async fn start_server(
     let child_handle = Arc::new(AsyncMutex::new(child));
     let running_server = RunningServer {
         stdin: Arc::new(AsyncMutex::new(stdin)),
-        recent_lines: Arc::new(SyncRwLock::new(VecDeque::with_capacity(50))),
+        recent_lines: Arc::new(SyncRwLock::new(VecDeque::with_capacity(MAX_CONSOLE_LINES))),
     };
 
     let recent_lines = running_server.recent_lines.clone();
