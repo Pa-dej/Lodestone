@@ -171,16 +171,17 @@
   .server-bg-icon :global(ellipse),
   .server-bg-icon :global(line) {
     stroke: currentColor !important;
+    fill: none !important;
   }
 
-  .server-bg-icon :global(path[fill="none"]),
-  .server-bg-icon :global(circle[fill="none"]),
-  .server-bg-icon :global(rect[fill="none"]),
-  .server-bg-icon :global(polygon[fill="none"]),
-  .server-bg-icon :global(polyline[fill="none"]),
-  .server-bg-icon :global(ellipse[fill="none"]),
-  .server-bg-icon :global(line[fill="none"]) {
-    fill: none !important;
+  .server-bg-icon :global(path[fill]:not([fill="none"])),
+  .server-bg-icon :global(circle[fill]:not([fill="none"])),
+  .server-bg-icon :global(rect[fill]:not([fill="none"])),
+  .server-bg-icon :global(polygon[fill]:not([fill="none"])),
+  .server-bg-icon :global(polyline[fill]:not([fill="none"])),
+  .server-bg-icon :global(ellipse[fill]:not([fill="none"])) {
+    fill: currentColor !important;
+    stroke: none !important;
   }
 
   .server-bg-icon :global(svg > path[d="M0 0h24v24H0z"]) {

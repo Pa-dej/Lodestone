@@ -25,6 +25,7 @@ interface ServerStoreState {
   download: DownloadProgress | null;
   restartingServers: string[];
   serverCommands: Record<string, string[]>;
+  serverOrder: string[];
 }
 
 const MAX_CONSOLE_LINES = 2500;
@@ -59,6 +60,7 @@ export const serverState = $state<ServerStoreState>({
   download: null,
   restartingServers: [],
   serverCommands: {},
+  serverOrder: [],
 });
 
 let consoleUnlisten: UnlistenFn | null = null;
@@ -176,6 +178,40 @@ export async function loadServers(): Promise<void> {
   try {
     const list = await invoke<ServerConfig[]>("list_servers");
     serverState.servers = list;
+    
+    // Загружаем сохраненный порядок из localStorage
+    const savedOrder = localStorage.getItem('server_order');
+    if (savedOrder) {
+      try {
+        const parsed = JSON.parse(savedOrder) as string[];
+        const currentIds = new Set(list.map(s => s.id));
+        // Фильтруем только существующие серверы
+        const validOrder = parsed.filter(id => currentIds.has(id));
+        // Добавляем новые серверы в конец
+        const existingIds = new Set(validOrder);
+        const newIds = list.map(s => s.id).filter(id => !existingIds.has(id));
+        serverState.serverOrder = [...validOrder, ...newIds];
+      } catch {
+        // Если не удалось распарсить, используем порядок по умолчанию
+        serverState.serverOrder = list.map(s => s.id);
+      }
+    } else if (serverState.serverOrder.length === 0) {
+      // Инициализируем порядок серверов, если он пустой
+      serverState.serverOrder = list.map(s => s.id);
+    } else {
+      // Добавляем новые серверы в конец
+      const existingIds = new Set(serverState.serverOrder);
+      const newIds = list.map(s => s.id).filter(id => !existingIds.has(id));
+      if (newIds.length > 0) {
+        serverState.serverOrder = [...serverState.serverOrder, ...newIds];
+      }
+      // Удаляем несуществующие серверы
+      const currentIds = new Set(list.map(s => s.id));
+      serverState.serverOrder = serverState.serverOrder.filter(id => currentIds.has(id));
+    }
+    
+    // Сохраняем порядок в localStorage
+    localStorage.setItem('server_order', JSON.stringify(serverState.serverOrder));
   } catch (error) {
     setServerError(error);
   } finally {
@@ -447,4 +483,17 @@ export function shutdownServerStore(): void {
     void downloadUnlisten();
     downloadUnlisten = null;
   }
+}
+
+export function updateServerOrder(newOrder: string[]): void {
+  serverState.serverOrder = newOrder;
+  // Сохраняем порядок в localStorage
+  localStorage.setItem('server_order', JSON.stringify(newOrder));
+}
+
+export function getOrderedServers(): ServerConfig[] {
+  const serverMap = new Map(serverState.servers.map(s => [s.id, s]));
+  return serverState.serverOrder
+    .map(id => serverMap.get(id))
+    .filter((s): s is ServerConfig => s !== undefined);
 }
