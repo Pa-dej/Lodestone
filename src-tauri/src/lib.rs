@@ -10,7 +10,7 @@ use std::{
     env,
     ffi::OsStr,
     fs,
-    io::{BufWriter, ErrorKind, Write},
+    io::{BufWriter, ErrorKind, Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
@@ -25,6 +25,7 @@ use tokio::{
     sync::{mpsc, Mutex as AsyncMutex},
 };
 use uuid::Uuid;
+use zip::ZipArchive;
 
 const CONSOLE_EVENT: &str = "console_line";
 const CONSOLE_BATCH_EVENT: &str = "console_batch";
@@ -33,6 +34,87 @@ const MAX_CONSOLE_LINES: usize = 50;
 const CONSOLE_CHANNEL_SIZE: usize = 64; // Уменьшен для экономии памяти (было 1024)
 const BATCH_SIZE: usize = 64; // Размер батча для отправки в UI
 const BATCH_INTERVAL_MS: u64 = 50; // Интервал flush батча (миллисекунды)
+const BASE_SERVER_COMMANDS: &[&str] = &[
+    "help",
+    "list",
+    "plugins",
+    "pl",
+    "plugin list",
+    "plugin add",
+    "plugin install",
+    "plugin remove",
+    "plugin delete",
+    "plugin update",
+    "stop",
+    "save-all",
+    "reload",
+    "restart",
+];
+const EXTENDED_SERVER_COMMANDS: &[&str] = &[
+    "say",
+    "save-on",
+    "save-off",
+    "time set day",
+    "time set night",
+    "time add",
+    "time query",
+    "weather clear",
+    "weather rain",
+    "weather thunder",
+    "gamerule keepInventory true",
+    "gamerule keepInventory false",
+    "gamerule doMobSpawning true",
+    "gamerule doMobSpawning false",
+    "difficulty peaceful",
+    "difficulty easy",
+    "difficulty normal",
+    "difficulty hard",
+    "gamemode survival",
+    "gamemode creative",
+    "gamemode adventure",
+    "gamemode spectator",
+    "tp",
+    "teleport",
+    "whitelist on",
+    "whitelist off",
+    "whitelist add",
+    "whitelist remove",
+    "whitelist list",
+    "whitelist reload",
+    "ban",
+    "ban-ip",
+    "pardon",
+    "pardon-ip",
+    "kick",
+    "op",
+    "deop",
+    "reload confirm",
+    "seed",
+    "give",
+    "clear",
+    "kill",
+    "effect",
+    "enchant",
+    "experience",
+    "xp",
+    "fill",
+    "setblock",
+    "summon",
+    "tellraw",
+    "title",
+    "scoreboard",
+    "team",
+    "worldborder",
+    "spawnpoint",
+    "setworldspawn",
+    "plugman list",
+    "plugman load",
+    "plugman unload",
+    "plugman reload",
+    "plugman enable",
+    "plugman disable",
+    "plugman check",
+];
 
 // Event-driven архитектура: события консоли
 #[derive(Debug, Clone)]
@@ -1948,9 +2030,12 @@ async fn send_command(
     id: String,
     command: String,
 ) -> Result<(), String> {
-    if command.trim().is_empty() {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
         return Err(String::from("Command cannot be empty"));
     }
+
+    let normalized_command = trimmed.strip_prefix('/').unwrap_or(trimmed);
 
     let running = {
         let running_map = state.running.lock().await;
@@ -1963,7 +2048,7 @@ async fn send_command(
 
     let mut stdin = server.stdin.lock().await;
     stdin
-        .write_all(format!("{}\n", command.trim()).as_bytes())
+        .write_all(format!("{normalized_command}\n").as_bytes())
         .await
         .map_err(|err| format!("Failed to send command to server: {err}"))?;
     stdin
@@ -1972,6 +2057,206 @@ async fn send_command(
         .map_err(|err| format!("Failed to flush server command: {err}"))?;
 
     Ok(())
+}
+
+fn extract_plugin_name_from_yaml(yaml: &str) -> Option<String> {
+    for raw_line in yaml.lines() {
+        let without_comment = raw_line.split('#').next().unwrap_or("").trim_end();
+        if without_comment.trim().is_empty() {
+            continue;
+        }
+
+        let indent = without_comment
+            .chars()
+            .take_while(|ch| ch.is_ascii_whitespace())
+            .count();
+        if indent > 0 {
+            continue;
+        }
+
+        let trimmed = without_comment.trim_start();
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        if !key.trim().eq_ignore_ascii_case("name") {
+            continue;
+        }
+
+        let cleaned = value
+            .trim()
+            .trim_matches(|ch| ch == '"' || ch == '\'')
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>()
+            .to_ascii_lowercase();
+
+        if !cleaned.is_empty() {
+            return Some(cleaned);
+        }
+    }
+
+    None
+}
+
+fn extract_commands_from_plugin_yaml(yaml: &str) -> Vec<String> {
+    let mut commands = Vec::new();
+    let mut in_commands_section = false;
+    let mut commands_section_indent = 0usize;
+    let mut command_entry_indent: Option<usize> = None;
+
+    for raw_line in yaml.lines() {
+        let without_comment = raw_line.split('#').next().unwrap_or("").trim_end();
+        if without_comment.trim().is_empty() {
+            continue;
+        }
+
+        let indent = without_comment
+            .chars()
+            .take_while(|ch| ch.is_ascii_whitespace())
+            .count();
+        let trimmed = without_comment.trim_start();
+
+        if !in_commands_section {
+            let Some((key, _)) = trimmed.split_once(':') else {
+                continue;
+            };
+            if key.trim().eq_ignore_ascii_case("commands") {
+                in_commands_section = true;
+                commands_section_indent = indent;
+                command_entry_indent = None;
+            }
+            continue;
+        }
+
+        if indent <= commands_section_indent {
+            break;
+        }
+
+        let Some((raw_key, _)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = raw_key.trim();
+        if key.is_empty() || key.starts_with('-') {
+            continue;
+        }
+
+        match command_entry_indent {
+            None => {
+                command_entry_indent = Some(indent);
+            }
+            Some(expected_indent) if indent < expected_indent => break,
+            Some(expected_indent) if indent > expected_indent => continue,
+            Some(_) => {}
+        }
+
+        let normalized = key
+            .trim_matches(|ch| ch == '"' || ch == '\'')
+            .trim()
+            .to_ascii_lowercase();
+        if normalized.is_empty() || normalized.chars().any(|ch| ch.is_whitespace()) {
+            continue;
+        }
+
+        commands.push(normalized);
+    }
+
+    commands
+}
+
+fn read_plugin_yaml_from_jar(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let mut archive = ZipArchive::new(file).ok()?;
+
+    for entry_name in ["plugin.yml", "paper-plugin.yml"] {
+        if let Ok(mut entry) = archive.by_name(entry_name) {
+            let mut content = String::new();
+            if entry.read_to_string(&mut content).is_ok() {
+                return Some(content);
+            }
+        }
+    }
+
+    None
+}
+
+fn collect_plugin_commands(server_path: &Path) -> Vec<String> {
+    let plugins_dir = server_path.join("plugins");
+    if !plugins_dir.exists() || !plugins_dir.is_dir() {
+        return Vec::new();
+    }
+
+    let entries = match fs::read_dir(&plugins_dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut commands = HashSet::<String>::new();
+
+    for entry_result in entries {
+        let Ok(entry) = entry_result else {
+            continue;
+        };
+        let path = entry.path();
+
+        let yaml_content = if path.is_file()
+            && path
+                .extension()
+                .and_then(OsStr::to_str)
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("jar"))
+        {
+            read_plugin_yaml_from_jar(&path)
+        } else if path.is_dir() {
+            let plugin_yml = path.join("plugin.yml");
+            let paper_plugin_yml = path.join("paper-plugin.yml");
+            if plugin_yml.exists() {
+                fs::read_to_string(plugin_yml).ok()
+            } else if paper_plugin_yml.exists() {
+                fs::read_to_string(paper_plugin_yml).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let Some(yaml) = yaml_content else {
+            continue;
+        };
+
+        let plugin_name = extract_plugin_name_from_yaml(&yaml);
+        for command in extract_commands_from_plugin_yaml(&yaml) {
+            commands.insert(command.clone());
+            if let Some(name) = plugin_name.as_deref() {
+                commands.insert(format!("{name}:{command}"));
+            }
+        }
+    }
+
+    let mut collected = commands.into_iter().collect::<Vec<_>>();
+    collected.sort();
+    collected
+}
+
+fn build_server_commands(include_extended: bool, plugin_commands: Vec<String>) -> Vec<String> {
+    let mut commands = BASE_SERVER_COMMANDS
+        .iter()
+        .map(|command| (*command).to_string())
+        .collect::<Vec<_>>();
+
+    if include_extended {
+        commands.extend(
+            EXTENDED_SERVER_COMMANDS
+                .iter()
+                .map(|command| (*command).to_string()),
+        );
+    }
+
+    commands.extend(plugin_commands);
+
+    let mut seen = HashSet::<String>::new();
+    commands.retain(|command| seen.insert(command.clone()));
+
+    commands
 }
 
 #[tauri::command]
@@ -1984,85 +2269,18 @@ async fn get_server_commands(
         running_map.get(&id).cloned()
     };
 
-    let Some(_server) = running else {
-        // Если сервер не запущен, возвращаем базовые команды
-        return Ok(vec![
-            "help".to_string(),
-            "list".to_string(),
-            "stop".to_string(),
-            "save-all".to_string(),
-            "reload".to_string(),
-            "restart".to_string(),
-        ]);
-    };
+    let server = load_servers_cached(&state)
+        .await?
+        .into_iter()
+        .find(|item| item.id == id)
+        .ok_or_else(|| String::from("Server not found"))?;
 
-    // Для получения команд от сервера нужно отправить команду help или tab completion
-    // Пока возвращаем расширенный список базовых команд
-    // TODO: Реализовать парсинг вывода команды /help или tab completion от сервера
-    Ok(vec![
-        "help".to_string(),
-        "list".to_string(),
-        "say".to_string(),
-        "stop".to_string(),
-        "save-all".to_string(),
-        "save-on".to_string(),
-        "save-off".to_string(),
-        "reload".to_string(),
-        "restart".to_string(),
-        "time set day".to_string(),
-        "time set night".to_string(),
-        "time add".to_string(),
-        "time query".to_string(),
-        "weather clear".to_string(),
-        "weather rain".to_string(),
-        "weather thunder".to_string(),
-        "gamerule keepInventory true".to_string(),
-        "gamerule keepInventory false".to_string(),
-        "gamerule doMobSpawning true".to_string(),
-        "gamerule doMobSpawning false".to_string(),
-        "difficulty peaceful".to_string(),
-        "difficulty easy".to_string(),
-        "difficulty normal".to_string(),
-        "difficulty hard".to_string(),
-        "gamemode survival".to_string(),
-        "gamemode creative".to_string(),
-        "gamemode adventure".to_string(),
-        "gamemode spectator".to_string(),
-        "tp".to_string(),
-        "teleport".to_string(),
-        "whitelist on".to_string(),
-        "whitelist off".to_string(),
-        "whitelist add".to_string(),
-        "whitelist remove".to_string(),
-        "whitelist list".to_string(),
-        "whitelist reload".to_string(),
-        "ban".to_string(),
-        "ban-ip".to_string(),
-        "pardon".to_string(),
-        "pardon-ip".to_string(),
-        "kick".to_string(),
-        "op".to_string(),
-        "deop".to_string(),
-        "reload confirm".to_string(),
-        "seed".to_string(),
-        "give".to_string(),
-        "clear".to_string(),
-        "kill".to_string(),
-        "effect".to_string(),
-        "enchant".to_string(),
-        "experience".to_string(),
-        "xp".to_string(),
-        "fill".to_string(),
-        "setblock".to_string(),
-        "summon".to_string(),
-        "tellraw".to_string(),
-        "title".to_string(),
-        "scoreboard".to_string(),
-        "team".to_string(),
-        "worldborder".to_string(),
-        "spawnpoint".to_string(),
-        "setworldspawn".to_string(),
-    ])
+    let server_path = server.path.clone();
+    let plugin_commands = tokio::task::spawn_blocking(move || collect_plugin_commands(&server_path))
+        .await
+        .unwrap_or_default();
+
+    Ok(build_server_commands(running.is_some(), plugin_commands))
 }
 
 #[tauri::command]

@@ -21,15 +21,27 @@
 
   let commandInput = $state("");
   let scroller = $state<HTMLDivElement | null>(null);
+  let completionsGrid = $state<HTMLDivElement | null>(null);
   let historyCursor = $state<number | null>(null);
   let tabCandidates = $state<string[]>([]);
-  let tabCandidateIndex = $state(0);
-  let tabPrefix = $state("");
   let showCompletions = $state(false);
   let lastTabTime = $state(0);
-  let completionStartPos = $state(0);
   let commandSuggestions = $state<string[]>([]);
   let selectedCompletionIndex = $state(-1);
+
+  const DOUBLE_TAB_WINDOW_MS = 500;
+  const AUTO_COMPLETION_LIMIT = 8;
+  const EMPTY_INPUT_SUGGESTIONS_LIMIT = 24;
+
+  function normalizeSuggestions(commands: string[]): string[] {
+    return Array.from(
+      new Set(
+        commands
+          .map((command) => command.trim())
+          .filter((command) => command.length > 0)
+      )
+    );
+  }
 
   const selectedServer = $derived(getServerById(serverId));
   const lines = $derived((serverId ? serverState.consoleLines[serverId] : []) ?? []);
@@ -43,18 +55,26 @@
     
     try {
       const commands = await getServerCommands(serverId);
-      commandSuggestions = commands;
+      commandSuggestions = normalizeSuggestions(commands);
     } catch (error) {
       console.error("Failed to load server commands:", error);
       // Fallback к базовым командам
-      commandSuggestions = [
+      commandSuggestions = normalizeSuggestions([
         "help",
         "list",
+        "plugins",
+        "pl",
+        "plugin list",
+        "plugin add",
+        "plugin install",
+        "plugin remove",
+        "plugin delete",
+        "plugin update",
         "stop", 
         "save-all",
         "reload",
         "restart"
-      ];
+      ]);
     }
   }
 
@@ -62,11 +82,16 @@
     if (!serverId || !commandInput.trim()) {
       return;
     }
-    await sendServerCommand(serverId, commandInput.trim());
+
+    const sent = await sendServerCommand(serverId, commandInput.trim());
+    if (!sent) {
+      return;
+    }
+
+    void loadServerCommands();
     commandInput = "";
     historyCursor = null;
     tabCandidates = [];
-    tabPrefix = "";
     showCompletions = false;
     selectedCompletionIndex = -1;
   }
@@ -79,60 +104,91 @@
     setAutoScroll(serverId, offset < 24);
   }
 
+  function ensureSelectedCompletionVisible(): void {
+    if (!showCompletions || selectedCompletionIndex < 0) {
+      return;
+    }
+
+    void tick().then(() => {
+      const selectedElement = completionsGrid?.querySelector<HTMLElement>(".completion-item-selected");
+      selectedElement?.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  function normalizeInputForMatch(input: string): string {
+    const trimmedStart = input.trimStart();
+    return trimmedStart.startsWith("/") ? trimmedStart.slice(1) : trimmedStart;
+  }
+
+  function formatCompletionForInput(input: string, completion: string): string {
+    const leadingSpaces = input.match(/^\s*/)?.[0] ?? "";
+    const hasLeadingSlash = input.trimStart().startsWith("/");
+    return `${leadingSpaces}${hasLeadingSlash ? "/" : ""}${completion}`;
+  }
+
+  function getMatchingCommands(input: string): string[] {
+    const normalized = normalizeInputForMatch(input).toLowerCase();
+    if (!normalized) {
+      return commandSuggestions;
+    }
+
+    return commandSuggestions.filter((cmd) =>
+      cmd.toLowerCase().startsWith(normalized)
+    );
+  }
+
   function applyTabCompletion(): void {
     const currentTime = Date.now();
-    const isDoubleTab = currentTime - lastTabTime < 500; // 500ms для двойного Tab
-    
-    const value = commandInput.trim();
-    if (!value) {
+    const isDoubleTab = currentTime - lastTabTime < DOUBLE_TAB_WINDOW_MS;
+    const normalizedInput = normalizeInputForMatch(commandInput);
+
+    if (!normalizedInput) {
+      if (isDoubleTab) {
+        const suggestions = commandSuggestions.slice(0, EMPTY_INPUT_SUGGESTIONS_LIMIT);
+        tabCandidates = suggestions;
+        showCompletions = suggestions.length > 0;
+        selectedCompletionIndex = -1;
+      } else {
+        showCompletions = false;
+        tabCandidates = [];
+        selectedCompletionIndex = -1;
+      }
       lastTabTime = currentTime;
       return;
     }
 
-    // Находим позицию для автодополнения (последнее слово)
-    const words = value.split(/\s+/);
-    const currentWord = words[words.length - 1];
-    const beforeCurrentWord = value.substring(0, value.lastIndexOf(currentWord));
-    
-    // Нормализуем поисковый термин (убираем "/" если есть)
-    const searchTerm = currentWord.startsWith('/') ? currentWord.slice(1) : currentWord;
-    
-    // Ищем подходящие команды
-    const matches = commandSuggestions.filter((cmd) => 
-      cmd.toLowerCase().startsWith(searchTerm.toLowerCase())
-    );
+    const matches = getMatchingCommands(commandInput);
 
     if (matches.length === 0) {
       showCompletions = false;
+      tabCandidates = [];
+      selectedCompletionIndex = -1;
       lastTabTime = currentTime;
       return;
     }
 
     if (matches.length === 1) {
-      // Единственное совпадение - автоматически дополняем
-      const completion = matches[0];
-      commandInput = beforeCurrentWord + completion;
+      commandInput = formatCompletionForInput(commandInput, matches[0]);
       showCompletions = false;
       tabCandidates = [];
+      selectedCompletionIndex = -1;
     } else {
-      // Несколько совпадений
       if (!isDoubleTab && !showCompletions) {
-        // Первый Tab - дополняем общую часть
         const commonPrefix = findCommonPrefix(matches);
-        if (commonPrefix.length > searchTerm.length) {
-          commandInput = beforeCurrentWord + commonPrefix;
+        if (commonPrefix.length > normalizedInput.length) {
+          commandInput = formatCompletionForInput(commandInput, commonPrefix);
           showCompletions = false;
+          tabCandidates = [];
+          selectedCompletionIndex = -1;
         } else {
-          // Общей части нет больше - показываем варианты
           showCompletions = true;
           tabCandidates = matches;
           selectedCompletionIndex = -1;
         }
       } else {
-        // Второй Tab или уже показаны варианты - показываем/обновляем все варианты
         showCompletions = true;
         tabCandidates = matches;
-        selectedCompletionIndex = -1; // Сбрасываем выбор при показе списка
+        selectedCompletionIndex = -1;
       }
     }
     
@@ -154,39 +210,28 @@
   }
 
   function handleCommandInput(): void {
-    // Показываем автодополнение при вводе
-    const value = commandInput.trim();
-    if (value.length > 0) {
-      const words = value.split(/\s+/);
-      const currentWord = words[words.length - 1];
-      
-      // Нормализуем поисковый термин (убираем "/" если есть)
-      const searchTerm = currentWord.startsWith('/') ? currentWord.slice(1) : currentWord;
-      
-      // Ищем команды
-      const matches = commandSuggestions.filter((cmd) => 
-        cmd.toLowerCase().startsWith(searchTerm.toLowerCase())
-      );
-      
-      if (matches.length > 0 && matches.length <= 8) {
-        tabCandidates = matches;
-        showCompletions = true;
-        selectedCompletionIndex = -1; // Сбрасываем выбор при автоматическом показе
-      } else {
-        showCompletions = false;
-      }
+    const normalizedInput = normalizeInputForMatch(commandInput);
+    if (normalizedInput.length === 0) {
+      showCompletions = false;
+      tabCandidates = [];
+      selectedCompletionIndex = -1;
+      return;
+    }
+
+    const matches = getMatchingCommands(commandInput);
+    if (matches.length > 0 && matches.length <= AUTO_COMPLETION_LIMIT) {
+      tabCandidates = matches;
+      showCompletions = true;
+      selectedCompletionIndex = -1;
     } else {
       showCompletions = false;
+      tabCandidates = [];
+      selectedCompletionIndex = -1;
     }
   }
 
   function selectCompletion(completion: string): void {
-    const value = commandInput.trim();
-    const words = value.split(/\s+/);
-    const currentWord = words[words.length - 1];
-    const beforeCurrentWord = value.substring(0, value.lastIndexOf(currentWord));
-    
-    commandInput = beforeCurrentWord + completion;
+    commandInput = formatCompletionForInput(commandInput, completion);
     showCompletions = false;
     tabCandidates = [];
     selectedCompletionIndex = -1;
@@ -254,6 +299,7 @@
         selectedCompletionIndex = selectedCompletionIndex <= 0 
           ? tabCandidates.length - 1 
           : selectedCompletionIndex - 1;
+        ensureSelectedCompletionVisible();
       } else {
         // Навигация по истории команд
         handleHistoryNavigation("up");
@@ -268,6 +314,7 @@
         selectedCompletionIndex = selectedCompletionIndex >= tabCandidates.length - 1 
           ? 0 
           : selectedCompletionIndex + 1;
+        ensureSelectedCompletionVisible();
       } else {
         // Навигация по истории команд
         handleHistoryNavigation("down");
@@ -278,7 +325,6 @@
     // Скрываем автодополнение при вводе
     showCompletions = false;
     tabCandidates = [];
-    tabPrefix = "";
     selectedCompletionIndex = -1;
     lastTabTime = 0;
   }
@@ -291,7 +337,6 @@
     void loadServerCommands(); // Загружаем команды при смене сервера
     historyCursor = null;
     tabCandidates = [];
-    tabPrefix = "";
     showCompletions = false;
     selectedCompletionIndex = -1;
   });
@@ -377,7 +422,7 @@
             <div class="completions-header">
               {t("console_available_commands")} ({tabCandidates.length}):
             </div>
-            <div class="completions-grid">
+            <div class="completions-grid" bind:this={completionsGrid}>
               {#each tabCandidates as completion, index}
                 <button
                   type="button"

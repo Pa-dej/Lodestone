@@ -28,6 +28,22 @@ interface ServerStoreState {
 }
 
 const MAX_CONSOLE_LINES = 2500;
+const FALLBACK_SERVER_COMMANDS = [
+  "help",
+  "list",
+  "plugins",
+  "pl",
+  "plugin list",
+  "plugin add",
+  "plugin install",
+  "plugin remove",
+  "plugin delete",
+  "plugin update",
+  "stop",
+  "save-all",
+  "reload",
+  "restart",
+];
 
 export const serverState = $state<ServerStoreState>({
   servers: [],
@@ -51,6 +67,24 @@ let pollHandle: ReturnType<typeof setInterval> | null = null;
 
 function setServerError(error: unknown): void {
   serverState.error = error instanceof Error ? error.message : String(error);
+}
+
+function shouldInvalidateServerCommandsCache(command: string): boolean {
+  const normalized = command.trim().replace(/^\/+/, "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    normalized === "reload" ||
+    normalized.startsWith("reload ") ||
+    normalized.startsWith("plugin ") ||
+    normalized === "plugins" ||
+    normalized.startsWith("plugins ") ||
+    normalized.startsWith("plugman ") ||
+    normalized === "pl" ||
+    normalized.startsWith("pl ")
+  );
 }
 
 function updateConsoleLines(serverId: string, nextLines: ConsoleEntry[]): void {
@@ -276,7 +310,7 @@ export async function saveServerProperties(
   }
 }
 
-export async function sendServerCommand(id: string, command: string): Promise<void> {
+export async function sendServerCommand(id: string, command: string): Promise<boolean> {
   serverState.error = null;
   try {
     await invoke("send_command", { id, command });
@@ -290,8 +324,13 @@ export async function sendServerCommand(id: string, command: string): Promise<vo
         [id]: next,
       };
     }
+    if (shouldInvalidateServerCommandsCache(trimmed)) {
+      clearServerCommandsCache(id);
+    }
+    return true;
   } catch (error) {
     setServerError(error);
+    return false;
   }
 }
 
@@ -311,21 +350,12 @@ export async function getServerCommands(id: string): Promise<string[]> {
     return commands;
   } catch (error) {
     console.error("Failed to get server commands:", error);
-    // Возвращаем базовые команды в случае ошибки
-    const fallbackCommands = [
-      "help",
-      "list", 
-      "stop",
-      "save-all",
-      "reload",
-      "restart"
-    ];
     // Кэшируем fallback команды
     serverState.serverCommands = {
       ...serverState.serverCommands,
-      [id]: fallbackCommands
+      [id]: FALLBACK_SERVER_COMMANDS
     };
-    return fallbackCommands;
+    return FALLBACK_SERVER_COMMANDS;
   }
 }
 
