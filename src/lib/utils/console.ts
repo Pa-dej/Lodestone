@@ -32,66 +32,14 @@ export function formatTimestamp(epochSeconds: number): string {
 }
 
 export function parseConsoleLine(payload: ConsoleLine): ParsedConsoleLine {
+  // Префиксы уже убраны на бэкенде, просто инферим уровень из сообщения
   const line = payload.line.trimEnd();
-  
-  // Сначала пробуем наш формат
-  const ourMatch = line.match(LINE_PATTERN);
-  if (ourMatch) {
-    const levelToken = ourMatch[3].toUpperCase();
-    const level: LogLevel =
-      levelToken === "ERROR"
-        ? "ERROR"
-        : levelToken === "WARN" || levelToken === "WARNING"
-          ? "WARN"
-          : levelToken === "SUCCESS"
-            ? "SUCCESS"
-            : levelToken === "DEBUG" || levelToken === "TRACE"
-              ? "DIM"
-              : "INFO";
-    return {
-      timestamp: ourMatch[1],
-      tag: ourMatch[2],
-      level,
-      message: ourMatch[4],
-      raw: line,
-    };
-  }
-
-  // Затем пробуем стандартный Minecraft формат
-  const mcMatch = line.match(MINECRAFT_PATTERN);
-  if (mcMatch) {
-    const levelToken = mcMatch[2].toUpperCase();
-    const level: LogLevel =
-      levelToken === "ERROR"
-        ? "ERROR"
-        : levelToken === "WARN" || levelToken === "WARNING"
-          ? "WARN"
-          : levelToken === "DEBUG" || levelToken === "TRACE"
-            ? "DIM"
-            : "INFO";
-    
-    // Определяем tag из сообщения или используем Server
-    let tag = "Server";
-    const message = mcMatch[3];
-    
-    // Инферим уровень из сообщения для SUCCESS
-    const inferredLevel = inferLevel(message);
-    const finalLevel = inferredLevel === "SUCCESS" ? "SUCCESS" : level;
-    
-    return {
-      timestamp: mcMatch[1],
-      tag,
-      level: finalLevel,
-      message,
-      raw: line,
-    };
-  }
-
-  // Fallback: не распознали формат
   const inferredLevel = inferLevel(line);
+  const timestamp = formatTimestamp(payload.timestamp);
+  
   return {
-    timestamp: formatTimestamp(payload.timestamp),
-    tag: inferredLevel === "ERROR" ? "ERROR" : "Console",
+    timestamp,
+    tag: inferredLevel === "ERROR" ? "ERROR" : "Server",
     level: inferredLevel,
     message: line,
     raw: line,

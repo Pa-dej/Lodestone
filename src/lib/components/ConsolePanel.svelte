@@ -391,8 +391,6 @@
       {:else}
         {#each lines as line (line.id)}
           <div class={`terminal-line level-${line.level.toLowerCase()}`}>
-            <span class="line-ts">[{line.timestampLabel}]</span>
-            <span class="line-tag">[{line.tag}/{line.level}]</span>
             <span class="line-message">{@html ansiToHtml(line.message)}</span>
             {#if line.repeats > 1}
               <span class="line-repeat">[x{line.repeats}]</span>
@@ -511,14 +509,6 @@
     word-break: break-word;
   }
 
-  .line-ts {
-    color: var(--text-hint);
-  }
-
-  .line-tag {
-    color: var(--text-hint);
-  }
-
   .line-message {
     flex: 1;
     min-width: 120px;
@@ -629,5 +619,19 @@
   .command-hint {
     color: var(--text-hint);
     font-size: 11px;
+  }
+
+  /* ANSI blink animation */
+  :global(span[style*="animation:blink"]) {
+    animation: blink 1s step-end infinite !important;
+  }
+
+  @keyframes blink {
+    0%, 49% {
+      opacity: 1;
+    }
+    50%, 100% {
+      opacity: 0;
+    }
   }
 </style>

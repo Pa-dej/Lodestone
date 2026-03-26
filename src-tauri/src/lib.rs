@@ -17,6 +17,9 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tokio::{
     fs as tokio_fs,
@@ -26,6 +29,9 @@ use tokio::{
 };
 use uuid::Uuid;
 use zip::ZipArchive;
+
+#[cfg(unix)]
+mod pty;
 
 const CONSOLE_EVENT: &str = "console_line";
 const CONSOLE_BATCH_EVENT: &str = "console_batch";
@@ -230,6 +236,9 @@ struct DownloadProgressPayload {
 
 #[derive(Clone)]
 struct RunningServer {
+    #[cfg(unix)]
+    pty_master: Arc<crate::pty::PtyMaster>,
+    #[cfg(not(unix))]
     stdin: Arc<AsyncMutex<ChildStdin>>,
     #[allow(dead_code)] // Хранится для поддержания канала открытым
     console_tx: mpsc::Sender<ConsoleEvent>, // Event streaming вместо shared state
@@ -1309,18 +1318,12 @@ where
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(raw_line)) = lines.next_line().await {
-            let stripped = strip_ansi_escapes::strip(raw_line.as_bytes());
-            
-            // Оптимизированная конвертация UTF-8: в 99% случаев это валидный UTF-8
-            let line: Arc<str> = match String::from_utf8(stripped) {
-                Ok(s) => s.into(),
-                Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned().into(),
-            };
+            // Сохраняем ANSI коды, только убираем префиксы
+            let cleaned = strip_log_prefix(&raw_line);
+            let line: Arc<str> = cleaned.into();
             
             let timestamp = now_timestamp_secs();
             
-            // Lock-free: просто отправляем событие в канал
-            // Если канал полон, send() будет ждать (backpressure)
             let event = ConsoleEvent::Line {
                 server_id: server_id.clone(),
                 line,
@@ -1328,12 +1331,157 @@ where
             };
             
             if console_tx.send(event).await.is_err() {
-                // Канал закрыт, выходим
                 break;
             }
         }
     });
 }
+/// Убирает префиксы типа "[14:58:41][Console/INFO]>" из строки лога
+/// Убирает префиксы типа "[14:58:41][Console/INFO]>" из строки лога
+/// Сохраняет ANSI escape-коды в сообщении
+fn strip_log_prefix(line: &str) -> &str {
+    // Ищем паттерн: [время][категория/уровень]> или [время] [категория/уровень]:
+    // Примеры: "[14:58:41][Console/INFO]>", "[14:58:41] [Server thread/INFO]:"
+    // Также обрабатываем ANSI коды внутри префиксов
+
+    let bytes = line.as_bytes();
+    let mut pos = 0;
+
+    // Пропускаем ANSI escape-коды в начале
+    while pos < bytes.len() && bytes[pos] == 0x1b {
+        pos += 1;
+        if pos < bytes.len() && bytes[pos] == b'[' {
+            pos += 1;
+            while pos < bytes.len() && bytes[pos] != b'm' {
+                pos += 1;
+            }
+            if pos < bytes.len() {
+                pos += 1; // пропускаем 'm'
+            }
+        }
+    }
+
+    // Пропускаем первый блок [...]
+    if bytes.get(pos) == Some(&b'[') {
+        pos += 1;
+        while pos < bytes.len() && bytes[pos] != b']' {
+            pos += 1;
+        }
+        if pos < bytes.len() {
+            pos += 1; // пропускаем ]
+        }
+    }
+
+    // Пропускаем пробелы и ANSI коды между блоками
+    loop {
+        if pos >= bytes.len() {
+            break;
+        }
+        if bytes[pos] == b' ' {
+            pos += 1;
+        } else if bytes[pos] == 0x1b && pos + 1 < bytes.len() && bytes[pos + 1] == b'[' {
+            pos += 2;
+            while pos < bytes.len() && bytes[pos] != b'm' {
+                pos += 1;
+            }
+            if pos < bytes.len() {
+                pos += 1;
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Пропускаем второй блок [...]
+    if bytes.get(pos) == Some(&b'[') {
+        pos += 1;
+        while pos < bytes.len() && bytes[pos] != b']' {
+            pos += 1;
+        }
+        if pos < bytes.len() {
+            pos += 1; // пропускаем ]
+        }
+    }
+
+    // Пропускаем : или > и пробелы после
+    while pos < bytes.len() && (bytes[pos] == b':' || bytes[pos] == b'>' || bytes[pos] == b' ') {
+        pos += 1;
+    }
+
+    // Пропускаем ANSI коды после префикса
+    while pos < bytes.len() && bytes[pos] == 0x1b {
+        pos += 1;
+        if pos < bytes.len() && bytes[pos] == b'[' {
+            pos += 1;
+            while pos < bytes.len() && bytes[pos] != b'm' {
+                pos += 1;
+            }
+            if pos < bytes.len() {
+                pos += 1;
+            }
+        }
+    }
+
+    if pos < line.len() {
+        &line[pos..]
+    } else {
+        line
+    }
+}
+
+#[cfg(unix)]
+fn spawn_pty_reader(
+    server_id: Arc<str>,
+    master: Arc<crate::pty::PtyMaster>,
+    tx: mpsc::Sender<ConsoleEvent>,
+) {
+    tokio::spawn(async move {
+        // Стековый буфер — никаких heap-аллокаций на горячем пути
+        let mut raw_buf = [0u8; 4096];
+        // Буфер для накопления неполных строк
+        let mut line_buf: Vec<u8> = Vec::with_capacity(256);
+
+        loop {
+            let n = match master.read(&mut raw_buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+
+            let chunk = &raw_buf[..n];
+
+            // Разбиваем по \n без лишних аллокаций
+            for &byte in chunk {
+                if byte == b'\n' {
+                    // strip \r если есть
+                    if line_buf.last() == Some(&b'\r') {
+                        line_buf.pop();
+                    }
+
+                    // Сохраняем ANSI коды, только убираем префиксы
+                    let raw_line = String::from_utf8_lossy(&line_buf);
+                    let cleaned = strip_log_prefix(&raw_line);
+                    let line: Arc<str> = cleaned.into();
+
+                    let event = ConsoleEvent::Line {
+                        server_id: server_id.clone(),
+                        line,
+                        timestamp: now_timestamp_secs(),
+                    };
+
+                    if tx.send(event).await.is_err() {
+                        return;
+                    }
+
+                    // Очищаем буфер строки (reuse аллокации)
+                    line_buf.clear();
+                } else {
+                    line_buf.push(byte);
+                }
+            }
+        }
+    });
+}
+
 
 // Event processor: единственный владелец cache, обрабатывает события с batching
 fn spawn_console_processor(
@@ -1774,11 +1922,19 @@ async fn start_server(
     let mut command = Command::new(java);
     command
         .current_dir(&server.path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
         .arg(format!("-Xms{ram_mb}M"))
         .arg(format!("-Xmx{ram_mb}M"));
+
+    #[cfg(not(unix))]
+    {
+        // Windows: используем jline флаги как fallback
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .arg("-Djline.terminal=dumb")
+            .arg("-Dorg.jline.terminal.type=dumb");
+    }
 
     for flag in extra_flags {
         command.arg(flag);
@@ -1786,18 +1942,55 @@ async fn start_server(
 
     command.arg("-jar").arg("server.jar").arg("nogui");
 
+    #[cfg(unix)]
+    let (pty_master, slave_fd) = crate::pty::PtyMaster::open()
+        .map_err(|e| format!("Failed to open PTY: {e}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::fd::IntoRawFd;
+        use std::os::unix::process::CommandExt;
+        let slave_raw = slave_fd.into_raw_fd();
+
+        // Передаём slave как stdin/stdout/stderr — процесс видит TTY
+        unsafe {
+            command.pre_exec(move || {
+                // Делаем slave основным терминалом процесса
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::ioctl(slave_raw, libc::TIOCSCTTY, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+            command
+                .stdin(Stdio::from_raw_fd(slave_raw))
+                .stdout(Stdio::from_raw_fd(slave_raw))
+                .stderr(Stdio::from_raw_fd(slave_raw));
+        }
+    }
+
     let mut child = command
         .spawn()
         .map_err(|err| format!("Failed to start server process: {err}"))?;
 
+    #[cfg(unix)]
+    let pty_master = Arc::new(pty_master);
+
+    #[cfg(not(unix))]
     let stdin = child
         .stdin
         .take()
         .ok_or_else(|| String::from("Failed to capture server stdin"))?;
+
+    #[cfg(not(unix))]
     let stdout = child
         .stdout
         .take()
         .ok_or_else(|| String::from("Failed to capture server stdout"))?;
+
+    #[cfg(not(unix))]
     let stderr = child
         .stderr
         .take()
@@ -1805,12 +1998,15 @@ async fn start_server(
 
     let child_handle = Arc::new(AsyncMutex::new(child));
     
-    // Создаём event streaming канал для консоли (уменьшенный размер для экономии памяти)
+    // Создаём event streaming канал для консоли
     let (console_tx, console_rx) = mpsc::channel::<ConsoleEvent>(CONSOLE_CHANNEL_SIZE);
     
     let recent_lines = Arc::new(SyncRwLock::new(VecDeque::with_capacity(MAX_CONSOLE_LINES)));
     
     let running_server = RunningServer {
+        #[cfg(unix)]
+        pty_master: pty_master.clone(),
+        #[cfg(not(unix))]
         stdin: Arc::new(AsyncMutex::new(stdin)),
         console_tx: console_tx.clone(),
         recent_lines: recent_lines.clone(),
@@ -1825,9 +2021,15 @@ async fn start_server(
 
     let server_id_arc: Arc<str> = server.id.clone().into();
     
-    // Запускаем readers (producers) - они только читают и отправляют события
-    spawn_console_reader(server_id_arc.clone(), stdout, console_tx.clone());
-    spawn_console_reader(server_id_arc.clone(), stderr, console_tx);
+    // Запускаем readers
+    #[cfg(unix)]
+    spawn_pty_reader(server_id_arc.clone(), pty_master.clone(), console_tx.clone());
+    
+    #[cfg(not(unix))]
+    {
+        spawn_console_reader(server_id_arc.clone(), stdout, console_tx.clone());
+        spawn_console_reader(server_id_arc.clone(), stderr, console_tx);
+    }
     
     // Запускаем processor (consumer) - единственный владелец cache
     spawn_console_processor(app_handle.clone(), server.id.clone(), console_rx, recent_lines);
@@ -2044,15 +2246,27 @@ async fn send_command(
         return Err(String::from("Server is not running"));
     };
 
-    let mut stdin = server.stdin.lock().await;
-    stdin
-        .write_all(format!("{normalized_command}\n").as_bytes())
+    let cmd_bytes = format!("{normalized_command}\n");
+
+    #[cfg(unix)]
+    server
+        .pty_master
+        .write_all(cmd_bytes.as_bytes())
         .await
-        .map_err(|err| format!("Failed to send command to server: {err}"))?;
-    stdin
-        .flush()
-        .await
-        .map_err(|err| format!("Failed to flush server command: {err}"))?;
+        .map_err(|e| format!("Failed to send command: {e}"))?;
+
+    #[cfg(not(unix))]
+    {
+        let mut stdin = server.stdin.lock().await;
+        stdin
+            .write_all(cmd_bytes.as_bytes())
+            .await
+            .map_err(|err| format!("Failed to send command to server: {err}"))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|err| format!("Failed to flush server command: {err}"))?;
+    }
 
     Ok(())
 }
