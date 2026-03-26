@@ -32,8 +32,8 @@ const CONSOLE_BATCH_EVENT: &str = "console_batch";
 const DOWNLOAD_PROGRESS_EVENT: &str = "download_progress";
 const MAX_CONSOLE_LINES: usize = 50;
 const CONSOLE_CHANNEL_SIZE: usize = 64; // Уменьшен для экономии памяти (было 1024)
-const BATCH_SIZE: usize = 64; // Размер батча для отправки в UI
-const BATCH_INTERVAL_MS: u64 = 50; // Интервал flush батча (миллисекунды)
+const BATCH_SIZE: usize = 8; // Очень маленький батч для мгновенного отклика
+const BATCH_INTERVAL_MS: u64 = 8; // Очень быстрый flush (8ms)
 const BASE_SERVER_COMMANDS: &[&str] = &[
     "help",
     "list",
@@ -233,7 +233,7 @@ struct RunningServer {
     stdin: Arc<AsyncMutex<ChildStdin>>,
     #[allow(dead_code)] // Хранится для поддержания канала открытым
     console_tx: mpsc::Sender<ConsoleEvent>, // Event streaming вместо shared state
-    recent_lines: Arc<SyncRwLock<VecDeque<Box<str>>>>, // Box<str> вместо Arc<str> для экономии памяти (нет atomic refcount)
+    recent_lines: Arc<SyncRwLock<VecDeque<Arc<str>>>>, // Arc<str> для zero-cost clone
 }
 
 #[derive(Clone, Default)]
@@ -1340,13 +1340,13 @@ fn spawn_console_processor(
     app_handle: AppHandle,
     server_id: String,
     mut console_rx: mpsc::Receiver<ConsoleEvent>,
-    recent_lines: Arc<SyncRwLock<VecDeque<Box<str>>>>,
+    recent_lines: Arc<SyncRwLock<VecDeque<Arc<str>>>>,
 ) {
     tokio::spawn(async move {
-        // Буфер для batching (используем Box<str> для экономии памяти)
-        let mut buffer: Vec<(Box<str>, u64)> = Vec::with_capacity(BATCH_SIZE);
+        // Буфер для batching
+        let mut buffer: Vec<(Arc<str>, u64)> = Vec::with_capacity(BATCH_SIZE);
         
-        // Таймер для периодического flush
+        // Таймер для периодического flush (очень быстрый для мгновенного отклика)
         let mut interval = tokio::time::interval(Duration::from_millis(BATCH_INTERVAL_MS));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         
@@ -1361,11 +1361,9 @@ fn spawn_console_processor(
                                 continue;
                             }
                             
-                            // Конвертируем Arc<str> в Box<str> для экономии памяти
-                            let boxed_line: Box<str> = line.to_string().into_boxed_str();
-                            buffer.push((boxed_line, timestamp));
+                            buffer.push((line, timestamp));
                             
-                            // Flush если буфер заполнен
+                            // Flush если буфер заполнен (маленький размер для быстрого отклика)
                             if buffer.len() >= BATCH_SIZE {
                                 flush_console_batch(&app_handle, &server_id, &mut buffer, &recent_lines);
                             }
@@ -1373,7 +1371,7 @@ fn spawn_console_processor(
                     }
                 }
                 
-                // Периодический flush по таймеру
+                // Периодический flush по таймеру (очень быстрый)
                 _ = interval.tick() => {
                     if !buffer.is_empty() {
                         flush_console_batch(&app_handle, &server_id, &mut buffer, &recent_lines);
@@ -1396,8 +1394,8 @@ fn spawn_console_processor(
 fn flush_console_batch(
     app_handle: &AppHandle,
     server_id: &str,
-    buffer: &mut Vec<(Box<str>, u64)>,
-    recent_lines: &Arc<SyncRwLock<VecDeque<Box<str>>>>,
+    buffer: &mut Vec<(Arc<str>, u64)>,
+    recent_lines: &Arc<SyncRwLock<VecDeque<Arc<str>>>>,
 ) {
     if buffer.is_empty() {
         return;
