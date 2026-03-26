@@ -1,6 +1,7 @@
 <script lang="ts">
   import Toggle from "$lib/components/Toggle.svelte";
   import CustomSelect from "$lib/components/CustomSelect.svelte";
+  import PropertyValueInput from "$lib/components/PropertyValueInput.svelte";
   import {
     getServerProperties,
     saveServerProperties,
@@ -487,11 +488,10 @@
                     );
                   }}
                 />
-                <input
-                  class="input"
+                <PropertyValueInput
                   value={entry.value}
-                  oninput={(event) => {
-                    const value = (event.currentTarget as HTMLInputElement).value;
+                  propertyKey={entry.key}
+                  onChange={(value) => {
                     properties = properties.map((item, currentIndex) =>
                       currentIndex === index ? { ...item, value } : item,
                     );

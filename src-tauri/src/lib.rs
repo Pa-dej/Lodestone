@@ -845,6 +845,26 @@ fn sanitized_property_key(key: &str) -> String {
     key.replace(['\r', '\n', '='], "").trim().to_string()
 }
 
+fn sanitize_directory_name(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c if c.is_control() => '-',
+            c => c,
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn generate_server_directory_name(name: &str, core: &str, version: &str) -> String {
+    let safe_name = sanitize_directory_name(name);
+    let safe_core = sanitize_directory_name(core);
+    let safe_version = sanitize_directory_name(version);
+    
+    format!("{}-{}-{}", safe_name, safe_core, safe_version)
+}
+
 fn parse_server_properties(content: &str) -> Vec<ServerPropertyEntry> {
     let mut entries = Vec::new();
 
@@ -1396,7 +1416,27 @@ async fn create_server(
     }
 
     let id = Uuid::new_v4().to_string();
-    let server_dir = servers_root_dir()?.join(&id);
+    let server_name = server_name_or_default(&config.name);
+    let dir_name = generate_server_directory_name(&server_name, &core, version);
+    let server_dir = servers_root_dir()?.join(&dir_name);
+    
+    // Если директория уже существует, добавляем суффикс
+    let server_dir = if server_dir.exists() {
+        let mut counter = 1;
+        loop {
+            let dir_with_suffix = servers_root_dir()?.join(format!("{}-{}", dir_name, counter));
+            if !dir_with_suffix.exists() {
+                break dir_with_suffix;
+            }
+            counter += 1;
+            if counter > 100 {
+                return Err(String::from("Failed to find available directory name"));
+            }
+        }
+    } else {
+        server_dir
+    };
+    
     tokio_fs::create_dir_all(&server_dir).await.map_err(|err| {
         format!(
             "Failed to create server directory {}: {err}",
@@ -1432,7 +1472,7 @@ async fn create_server(
 
     let server = ServerConfig {
         id: String::from(&id),
-        name: server_name_or_default(&config.name),
+        name: server_name,
         core,
         version: String::from(version),
         port: config.port,

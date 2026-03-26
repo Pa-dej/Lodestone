@@ -10,6 +10,7 @@
 
   let bootError = $state<string | null>(null);
   let initialized = $state(false);
+  let appStartTime = Date.now();
 
   async function initializeApp(): Promise<void> {
     try {
@@ -25,8 +26,32 @@
       }
       startPollingServers();
       initialized = true;
+      
+      // Скрываем лоадер после инициализации с учетом минимального времени
+      const loader = document.getElementById('app-loader');
+      if (loader) {
+        const elapsed = Date.now() - appStartTime;
+        const minLoadTime = 800;
+        const remaining = Math.max(0, minLoadTime - elapsed);
+        
+        setTimeout(() => {
+          loader.classList.add('loaded');
+        }, remaining);
+      }
     } catch (error) {
       bootError = error instanceof Error ? error.message : String(error);
+      
+      // Скрываем лоадер даже при ошибке
+      const loader = document.getElementById('app-loader');
+      if (loader) {
+        const elapsed = Date.now() - appStartTime;
+        const minLoadTime = 800;
+        const remaining = Math.max(0, minLoadTime - elapsed);
+        
+        setTimeout(() => {
+          loader.classList.add('loaded');
+        }, remaining);
+      }
     }
   }
 

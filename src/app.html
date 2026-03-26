@@ -6,8 +6,93 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Lodestone</title>
     %sveltekit.head%
+    <style>
+      body {
+        background: #1a1713;
+        margin: 0;
+        padding: 0;
+      }
+      
+      #app-loader {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #1a1713;
+        z-index: 9999;
+        transition: opacity 0.4s ease, visibility 0.4s ease;
+      }
+      
+      [data-theme="light"] body,
+      [data-theme="light"] #app-loader {
+        background: #f5f2ed;
+      }
+      
+      #app-loader.loaded {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+      
+      @keyframes loaderAnimation {
+        0%, 100% {
+          stroke-dashoffset: 160;
+          stroke-dasharray: 80 80;
+          opacity: 0.2;
+        }
+        50% {
+          stroke-dashoffset: 0;
+          stroke-dasharray: 160 0;
+          opacity: 1;
+        }
+      }
+      
+      #app-loader .hexagon {
+        animation: loaderAnimation 4.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+      }
+      
+      #app-loader .circle {
+        animation: loaderAnimation 4.4s cubic-bezier(0.45, 0, 0.55, 1) infinite 1s;
+      }
+      
+      #app-loader svg {
+        stroke: #5a9e6a;
+        width: 64px;
+        height: 64px;
+      }
+      
+      [data-theme="light"] #app-loader svg {
+        stroke: #3d7a4c;
+      }
+    </style>
   </head>
   <body data-sveltekit-preload-data="hover">
+    <div id="app-loader">
+      <svg viewBox="0 0 24 24" fill="none"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path class="hexagon"
+          d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16"/>
+        <circle class="circle" cx="12" cy="12" r="4"/>
+      </svg>
+    </div>
     <div style="display: contents">%sveltekit.body%</div>
+    <script>
+      // Минимальное время показа лоадера - 800ms
+      const minLoadTime = 800;
+      const startTime = Date.now();
+      
+      window.addEventListener('load', () => {
+        const loader = document.getElementById('app-loader');
+        if (loader) {
+          const elapsed = Date.now() - startTime;
+          const remaining = Math.max(0, minLoadTime - elapsed);
+          
+          setTimeout(() => {
+            loader.classList.add('loaded');
+          }, remaining);
+        }
+      });
+    </script>
   </body>
 </html>
