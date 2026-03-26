@@ -63,29 +63,30 @@
     display: flex;
     flex-direction: column;
     padding: 14px 10px;
-    gap: 20px;
+    gap: 16px;
     flex-shrink: 0;
   }
 
   .sidebar-header {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 0 6px;
-    min-height: 42px;
+    gap: 12px;
+    padding: 8px 6px;
+    min-height: 56px;
   }
 
   .brand-icon {
-    width: 30px;
-    height: 30px;
+    width: 42px;
+    height: 42px;
     display: grid;
     place-items: center;
     color: var(--accent);
+    flex-shrink: 0;
   }
 
   .brand-icon :global(svg) {
-    width: 24px;
-    height: 24px;
+    width: 36px;
+    height: 36px;
   }
 
   .brand {
@@ -93,8 +94,8 @@
     font-style: italic;
     font-weight: 300;
     letter-spacing: -0.02em;
-    font-size: 24px;
-    line-height: 0.95;
+    font-size: 28px;
+    line-height: 1;
   }
 
   .sidebar-nav {
