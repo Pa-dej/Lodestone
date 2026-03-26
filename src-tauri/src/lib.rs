@@ -1,14 +1,16 @@
 use futures_util::StreamExt;
+use parking_lot::RwLock as SyncRwLock;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    borrow::Cow,
     cmp::Ordering,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     env,
     ffi::OsStr,
     fs,
-    io::ErrorKind,
+    io::{BufWriter, ErrorKind, Write},
     net::TcpListener,
     path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
@@ -125,12 +127,13 @@ struct DownloadProgressPayload {
 #[derive(Clone)]
 struct RunningServer {
     stdin: Arc<AsyncMutex<ChildStdin>>,
-    recent_lines: Arc<AsyncMutex<Vec<String>>>, // Кэш последних строк консоли
+    recent_lines: Arc<SyncRwLock<VecDeque<String>>>, // Кэш последних строк консоли (VecDeque для O(1) операций)
 }
 
 #[derive(Clone, Default)]
 struct AppState {
     running: Arc<AsyncMutex<HashMap<String, RunningServer>>>,
+    servers_cache: Arc<SyncRwLock<Option<Vec<ServerConfig>>>>, // Кэш серверов в памяти
 }
 
 fn now_timestamp_secs() -> u64 {
@@ -217,24 +220,57 @@ async fn load_servers_from_disk() -> Result<Vec<ServerConfig>, String> {
         .map_err(|err| format!("Failed to parse servers.json: {err}"))
 }
 
-async fn save_servers_to_disk(servers: &[ServerConfig]) -> Result<(), String> {
+// Загрузка серверов с кэшированием
+async fn load_servers_cached(state: &AppState) -> Result<Vec<ServerConfig>, String> {
+    // Проверяем кэш
+    {
+        let cache = state.servers_cache.read();
+        if let Some(ref servers) = *cache {
+            return Ok(servers.clone());
+        }
+    }
+    
+    // Загружаем с диска и кэшируем
+    let servers = load_servers_from_disk().await?;
+    {
+        let mut cache = state.servers_cache.write();
+        *cache = Some(servers.clone());
+    }
+    
+    Ok(servers)
+}
+
+// Инвалидация кэша при изменении
+fn invalidate_servers_cache(state: &AppState) {
+    let mut cache = state.servers_cache.write();
+    *cache = None;
+}
+
+async fn save_servers_to_disk(servers: &[ServerConfig], state: Option<&AppState>) -> Result<(), String> {
     ensure_app_dirs().await?;
     let file_path = servers_file_path()?;
     let body = serde_json::to_vec_pretty(servers)
         .map_err(|err| format!("Failed to serialize server list: {err}"))?;
     tokio_fs::write(&file_path, body)
         .await
-        .map_err(|err| format!("Failed to write servers.json: {err}"))
+        .map_err(|err| format!("Failed to write servers.json: {err}"))?;
+    
+    // Инвалидируем кэш после сохранения
+    if let Some(state) = state {
+        invalidate_servers_cache(state);
+    }
+    
+    Ok(())
 }
 
-async fn set_server_running_flag(server_id: &str, running: bool) -> Result<(), String> {
-    let mut servers = load_servers_from_disk().await?;
+async fn set_server_running_flag(state: &AppState, server_id: &str, running: bool) -> Result<(), String> {
+    let mut servers = load_servers_cached(state).await?;
     for server in &mut servers {
         if server.id == server_id {
             server.running = running;
         }
     }
-    save_servers_to_disk(&servers).await
+    save_servers_to_disk(&servers, Some(state)).await
 }
 
 async fn load_settings_from_disk() -> Result<AppSettings, String> {
@@ -292,8 +328,8 @@ fn java_exec(settings: &AppSettings) -> String {
     }
 }
 
-fn split_jvm_flags(raw: &str) -> Vec<String> {
-    raw.split_whitespace().map(String::from).collect()
+fn split_jvm_flags(raw: &str) -> Vec<&str> {
+    raw.split_whitespace().collect()
 }
 
 fn server_name_or_default(input: &str) -> String {
@@ -305,10 +341,10 @@ fn server_name_or_default(input: &str) -> String {
     }
 }
 
-fn emit_console_line(app_handle: &AppHandle, server_id: &str, line: impl Into<String>) {
+fn emit_console_line(app_handle: &AppHandle, server_id: &str, line: &str) {
     let payload = ConsoleLinePayload {
-        server_id: String::from(server_id),
-        line: line.into(),
+        server_id: server_id.to_string(),
+        line: line.to_string(),
         timestamp: now_timestamp_secs(),
     };
     let _ = app_handle.emit(CONSOLE_EVENT, payload);
@@ -325,8 +361,8 @@ fn emit_download_progress(
     done: bool,
 ) {
     let payload = DownloadProgressPayload {
-        server_id: String::from(server_id),
-        filename: String::from(filename),
+        server_id: server_id.to_string(),
+        filename: filename.to_string(),
         downloaded_bytes,
         total_bytes,
         percent,
@@ -340,24 +376,15 @@ fn normalize_core(core: &str) -> String {
     core.trim().to_ascii_lowercase()
 }
 
-fn parse_filename_from_url(url: &str) -> String {
-    let file_name = url.rsplit('/').next().unwrap_or("server.jar");
-    if file_name.is_empty() {
-        String::from("server.jar")
-    } else {
-        String::from(file_name)
-    }
-}
-
-fn split_natural_chunks(value: &str) -> Vec<String> {
-    let mut chunks: Vec<String> = Vec::new();
+fn split_natural_chunks(value: &str) -> Vec<Cow<'_, str>> {
+    let mut chunks: Vec<Cow<'_, str>> = Vec::new();
     let mut current = String::new();
     let mut current_is_digit: Option<bool> = None;
 
     for ch in value.trim().chars() {
         if !ch.is_ascii_alphanumeric() {
             if !current.is_empty() {
-                chunks.push(current);
+                chunks.push(Cow::Owned(current));
                 current = String::new();
                 current_is_digit = None;
             }
@@ -367,7 +394,7 @@ fn split_natural_chunks(value: &str) -> Vec<String> {
         let is_digit = ch.is_ascii_digit();
         if let Some(last_kind) = current_is_digit {
             if last_kind != is_digit {
-                chunks.push(current);
+                chunks.push(Cow::Owned(current));
                 current = String::new();
             }
         }
@@ -377,7 +404,7 @@ fn split_natural_chunks(value: &str) -> Vec<String> {
     }
 
     if !current.is_empty() {
-        chunks.push(current);
+        chunks.push(Cow::Owned(current));
     }
 
     chunks
@@ -424,7 +451,7 @@ fn compare_minecraft_versions(left: &str, right: &str) -> Ordering {
                 let right_is_num = right_chunk.chars().all(|ch| ch.is_ascii_digit());
 
                 let order = match (left_is_num, right_is_num) {
-                    (true, true) => compare_numeric_chunks(left_chunk, right_chunk),
+                    (true, true) => compare_numeric_chunks(left_chunk.as_ref(), right_chunk.as_ref()),
                     (false, false) => left_chunk.cmp(right_chunk),
                     (true, false) => Ordering::Greater,
                     (false, true) => Ordering::Less,
@@ -435,14 +462,14 @@ fn compare_minecraft_versions(left: &str, right: &str) -> Ordering {
                 }
             }
             (Some(left_chunk), None) => {
-                return if is_prerelease_chunk(left_chunk) {
+                return if is_prerelease_chunk(left_chunk.as_ref()) {
                     Ordering::Less
                 } else {
                     Ordering::Greater
                 };
             }
             (None, Some(right_chunk)) => {
-                return if is_prerelease_chunk(right_chunk) {
+                return if is_prerelease_chunk(right_chunk.as_ref()) {
                     Ordering::Greater
                 } else {
                     Ordering::Less
@@ -578,21 +605,24 @@ async fn download_to_path(
     let file_name = destination
         .file_name()
         .and_then(OsStr::to_str)
-        .map(String::from)
-        .unwrap_or_else(|| parse_filename_from_url(url));
+        .unwrap_or_else(|| "server.jar");
 
     let mut stream = response.bytes_stream();
-    let mut file = tokio_fs::File::create(destination)
+    let file = tokio_fs::File::create(destination)
         .await
         .map_err(|err| format!("Failed to create file {}: {err}", destination.display()))?;
+    
+    // Используем буферизованную запись для уменьшения syscalls
+    let std_file = file.into_std().await;
+    let mut buffered_file = BufWriter::with_capacity(64 * 1024, std_file);
 
     let mut downloaded_bytes: u64 = 0;
     let started_at = Instant::now();
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result.map_err(|err| format!("Download stream failure: {err}"))?;
-        file.write_all(&chunk)
-            .await
+        buffered_file
+            .write_all(&chunk)
             .map_err(|err| format!("Failed writing {}: {err}", destination.display()))?;
         downloaded_bytes += chunk.len() as u64;
 
@@ -607,7 +637,7 @@ async fn download_to_path(
         emit_download_progress(
             app_handle,
             server_id,
-            &file_name,
+            file_name,
             downloaded_bytes,
             total_bytes,
             percent,
@@ -616,8 +646,8 @@ async fn download_to_path(
         );
     }
 
-    file.flush()
-        .await
+    buffered_file
+        .flush()
         .map_err(|err| format!("Failed to flush {}: {err}", destination.display()))?;
 
     Ok(())
@@ -1160,7 +1190,7 @@ fn spawn_console_reader<R>(
     app_handle: AppHandle, 
     server_id: String, 
     reader: R,
-    recent_lines: Arc<AsyncMutex<Vec<String>>>,
+    recent_lines: Arc<SyncRwLock<VecDeque<String>>>,
 )
 where
     R: AsyncRead + Send + Unpin + 'static,
@@ -1169,18 +1199,18 @@ where
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(raw_line)) = lines.next_line().await {
             let stripped = strip_ansi_escapes::strip(raw_line.as_bytes());
-            let normalized = String::from_utf8_lossy(&stripped).to_string();
+            let normalized = String::from_utf8_lossy(&stripped);
             
-            // Сохраняем строку в кэш (последние 50 строк)
+            // Сохраняем строку в кэш (последние 50 строк) - O(1) операции с VecDeque
             {
-                let mut cache = recent_lines.lock().await;
-                cache.push(normalized.clone());
-                if cache.len() > 50 {
-                    cache.remove(0);
+                let mut cache = recent_lines.write();
+                if cache.len() >= 50 {
+                    cache.pop_front(); // O(1) вместо remove(0)
                 }
+                cache.push_back(normalized.to_string()); // Только одна аллокация
             }
             
-            emit_console_line(&app_handle, &server_id, normalized);
+            emit_console_line(&app_handle, &server_id, &normalized);
         }
     });
 }
@@ -1198,7 +1228,7 @@ fn spawn_process_watcher(
             let mut running = state.running.lock().await;
             running.remove(&server_id);
         }
-        let _ = set_server_running_flag(&server_id, false).await;
+        let _ = set_server_running_flag(&state, &server_id, false).await;
 
         match status_result {
             Ok(status) => {
@@ -1206,13 +1236,13 @@ fn spawn_process_watcher(
                     emit_console_line(
                         &app_handle,
                         &server_id,
-                        format!("[SYSTEM/SUCCESS] Server stopped ({status})"),
+                        &format!("[SYSTEM/SUCCESS] Server stopped ({status})"),
                     );
                 } else {
                     emit_console_line(
                         &app_handle,
                         &server_id,
-                        format!("[SYSTEM/ERROR] Server exited unexpectedly ({status})"),
+                        &format!("[SYSTEM/ERROR] Server exited unexpectedly ({status})"),
                     );
                 }
             }
@@ -1220,7 +1250,7 @@ fn spawn_process_watcher(
                 emit_console_line(
                     &app_handle,
                     &server_id,
-                    format!("[SYSTEM/ERROR] Failed to wait for process: {err}"),
+                    &format!("[SYSTEM/ERROR] Failed to wait for process: {err}"),
                 );
             }
         }
@@ -1233,7 +1263,7 @@ fn running_ids(map: &HashMap<String, RunningServer>) -> HashSet<String> {
 
 #[tauri::command]
 async fn list_servers(state: State<'_, AppState>) -> Result<Vec<ServerConfig>, String> {
-    let mut servers = match load_servers_from_disk().await {
+    let mut servers = match load_servers_cached(&state).await {
         Ok(items) => items,
         Err(_) => Vec::new(),
     };
@@ -1275,7 +1305,7 @@ async fn get_server_stats_internal(
     };
 
     // Получаем max_players из server.properties
-    let max_players = get_max_players_from_properties(id).await.unwrap_or(20);
+    let max_players = get_max_players_from_properties(state.inner(), id).await.unwrap_or(20);
 
     // Получаем количество игроков из консоли (не отправляя команды)
     match get_online_players_count(&server, id).await {
@@ -1301,10 +1331,11 @@ async fn get_online_players_count(
     
     // Парсим последние строки консоли для поиска ответа на команду list
     {
-        let recent_lines = server.recent_lines.lock().await;
+        let recent_lines = server.recent_lines.read();
         
         // Ищем в последних 20 строках любые упоминания количества игроков
-        for line in recent_lines.iter().rev().take(20) {
+        let start_idx = recent_lines.len().saturating_sub(20);
+        for line in recent_lines.iter().skip(start_idx).rev() {
             if let Some(count) = parse_player_count_from_line(line) {
                 return Ok(count);
             }
@@ -1317,43 +1348,44 @@ async fn get_online_players_count(
 
 // Функция для парсинга количества игроков из строки консоли
 fn parse_player_count_from_line(line: &str) -> Option<u32> {
-    let line_lower = line.to_lowercase();
-    
     // Основной паттерн: "There are X of a max of Y players online"
     // Пример: "[19:31:23 INFO]: There are 0 of a max of 20 players online:"
-    if line_lower.contains("there are") && line_lower.contains("of a max of") && line_lower.contains("players online") {
-        // Ищем числа в строке
-        let words: Vec<&str> = line.split_whitespace().collect();
-        for (i, word) in words.iter().enumerate() {
-            if word.to_lowercase() == "are" && i + 1 < words.len() {
-                // Следующее слово после "are" должно быть количество игроков
-                let count_word = words[i + 1];
-                if let Ok(count) = count_word.parse::<u32>() {
-                    return Some(count);
+    if line.contains("there are") || line.contains("There are") {
+        if line.contains("of a max of") && line.contains("players online") {
+            // Ищем числа без создания Vec - итерируем напрямую
+            let mut found_are = false;
+            for word in line.split_whitespace() {
+                if found_are {
+                    if let Ok(count) = word.parse::<u32>() {
+                        return Some(count);
+                    }
+                }
+                if word.eq_ignore_ascii_case("are") {
+                    found_are = true;
                 }
             }
-        }
-    }
-    
-    // Альтернативный паттерн: "There are X players online"
-    if line_lower.contains("there are") && line_lower.contains("players online") && !line_lower.contains("of a max of") {
-        let words: Vec<&str> = line.split_whitespace().collect();
-        for (i, word) in words.iter().enumerate() {
-            if word.to_lowercase() == "are" && i + 1 < words.len() {
-                let count_word = words[i + 1];
-                if let Ok(count) = count_word.parse::<u32>() {
-                    return Some(count);
+        } else if line.contains("players online") {
+            // Альтернативный паттерн: "There are X players online"
+            let mut found_are = false;
+            for word in line.split_whitespace() {
+                if found_are {
+                    if let Ok(count) = word.parse::<u32>() {
+                        return Some(count);
+                    }
+                }
+                if word.eq_ignore_ascii_case("are") {
+                    found_are = true;
                 }
             }
         }
     }
     
     // Паттерн для списка игроков: "Online players (X): Player1, Player2"
-    if line_lower.contains("online players") && line_lower.contains("(") && line_lower.contains(")") {
-        if let Some(start) = line_lower.find('(') {
-            if let Some(end) = line_lower.find(')') {
+    if line.contains("online players") || line.contains("Online players") {
+        if let Some(start) = line.find('(') {
+            if let Some(end) = line.find(')') {
                 if start < end {
-                    let count_str = &line_lower[start + 1..end];
+                    let count_str = &line[start + 1..end];
                     if let Ok(count) = count_str.parse::<u32>() {
                         return Some(count);
                     }
@@ -1366,8 +1398,8 @@ fn parse_player_count_from_line(line: &str) -> Option<u32> {
 }
 
 // Функция для получения max-players из server.properties
-async fn get_max_players_from_properties(server_id: &str) -> Result<u32, String> {
-    let servers = load_servers_from_disk().await?;
+async fn get_max_players_from_properties(state: &AppState, server_id: &str) -> Result<u32, String> {
+    let servers = load_servers_cached(state).await?;
     let server = servers
         .iter()
         .find(|s| s.id == server_id)
@@ -1400,6 +1432,7 @@ async fn get_max_players_from_properties(server_id: &str) -> Result<u32, String>
 #[tauri::command]
 async fn create_server(
     app_handle: AppHandle,
+    state: State<'_, AppState>,
     config: NewServerConfig,
 ) -> Result<ServerConfig, String> {
     ensure_app_dirs().await?;
@@ -1483,9 +1516,9 @@ async fn create_server(
         max_players: None,
     };
 
-    let mut servers = load_servers_from_disk().await?;
+    let mut servers = load_servers_cached(&state).await?;
     servers.push(server.clone());
-    save_servers_to_disk(&servers).await?;
+    save_servers_to_disk(&servers, Some(&state)).await?;
 
     emit_download_progress(&app_handle, &id, "server.jar", 1, 1, 100.0, 0.0, true);
 
@@ -1505,17 +1538,18 @@ async fn start_server(
         }
     }
 
-    let server = load_servers_from_disk()
+    let server = load_servers_cached(&state)
         .await?
         .into_iter()
         .find(|item| item.id == id)
         .ok_or_else(|| String::from("Server not found"))?;
 
     if let Err(port_error) = ensure_server_port_available(server.port) {
+        let error_msg = format!("[SYSTEM/ERROR] {port_error}");
         emit_console_line(
             &app_handle,
             &server.id,
-            format!("[SYSTEM/ERROR] {port_error}"),
+            &error_msg,
         );
         return Err(port_error);
     }
@@ -1561,7 +1595,7 @@ async fn start_server(
     let child_handle = Arc::new(AsyncMutex::new(child));
     let running_server = RunningServer {
         stdin: Arc::new(AsyncMutex::new(stdin)),
-        recent_lines: Arc::new(AsyncMutex::new(Vec::new())),
+        recent_lines: Arc::new(SyncRwLock::new(VecDeque::with_capacity(50))),
     };
 
     let recent_lines = running_server.recent_lines.clone();
@@ -1571,7 +1605,7 @@ async fn start_server(
         running.insert(server.id.clone(), running_server);
     }
 
-    let _ = set_server_running_flag(&server.id, true).await;
+    let _ = set_server_running_flag(&state, &server.id, true).await;
 
     spawn_console_reader(app_handle.clone(), server.id.clone(), stdout, recent_lines.clone());
     spawn_console_reader(app_handle.clone(), server.id.clone(), stderr, recent_lines.clone());
@@ -1619,7 +1653,7 @@ async fn delete_server(state: State<'_, AppState>, id: String) -> Result<(), Str
         }
     }
 
-    let mut servers = load_servers_from_disk().await?;
+    let mut servers = load_servers_cached(&state).await?;
     let index = servers
         .iter()
         .position(|item| item.id == id)
@@ -1631,12 +1665,12 @@ async fn delete_server(state: State<'_, AppState>, id: String) -> Result<(), Str
             .await
             .map_err(|err| format!("Failed to remove {}: {err}", server.path.display()))?;
     }
-    save_servers_to_disk(&servers).await
+    save_servers_to_disk(&servers, Some(&state)).await
 }
 
 #[tauri::command]
-async fn open_server_folder(id: String) -> Result<(), String> {
-    let server = load_servers_from_disk()
+async fn open_server_folder(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let server = load_servers_cached(&state)
         .await?
         .into_iter()
         .find(|item| item.id == id)
@@ -1675,8 +1709,8 @@ async fn open_server_folder(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn get_server_properties(id: String) -> Result<Vec<ServerPropertyEntry>, String> {
-    let server = load_servers_from_disk()
+async fn get_server_properties(state: State<'_, AppState>, id: String) -> Result<Vec<ServerPropertyEntry>, String> {
+    let server = load_servers_cached(&state)
         .await?
         .into_iter()
         .find(|item| item.id == id)
@@ -1699,10 +1733,11 @@ async fn get_server_properties(id: String) -> Result<Vec<ServerPropertyEntry>, S
 
 #[tauri::command]
 async fn save_server_properties(
+    state: State<'_, AppState>,
     id: String,
     entries: Vec<ServerPropertyEntry>,
 ) -> Result<(), String> {
-    let server = load_servers_from_disk()
+    let server = load_servers_cached(&state)
         .await?
         .into_iter()
         .find(|item| item.id == id)
@@ -1739,10 +1774,10 @@ async fn save_server_properties(
 
     if let Some(server_port) = normalized.iter().find(|entry| entry.key == "server-port") {
         if let Ok(parsed_port) = server_port.value.parse::<u16>() {
-            let mut servers = load_servers_from_disk().await?;
+            let mut servers = load_servers_cached(&state).await?;
             if let Some(server_entry) = servers.iter_mut().find(|item| item.id == id) {
                 server_entry.port = parsed_port;
-                save_servers_to_disk(&servers).await?;
+                save_servers_to_disk(&servers, Some(&state)).await?;
             }
         }
     }
@@ -1751,8 +1786,8 @@ async fn save_server_properties(
 }
 
 #[tauri::command]
-async fn attach_console(id: String) -> Result<(), String> {
-    let exists = load_servers_from_disk()
+async fn attach_console(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let exists = load_servers_cached(&state)
         .await?
         .into_iter()
         .any(|server| server.id == id);
