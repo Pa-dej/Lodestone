@@ -2,6 +2,16 @@
   import Toggle from "$lib/components/Toggle.svelte";
   import CustomSelect from "$lib/components/CustomSelect.svelte";
   import PropertyValueInput from "$lib/components/PropertyValueInput.svelte";
+  import PaperIcon from "../../icons/servers/Paper.svg?raw";
+  import PurpurIcon from "../../icons/servers/Purpur.svg?raw";
+  import FabricIcon from "../../icons/servers/Fabric.svg?raw";
+  import QuiltIcon from "../../icons/servers/Quilt.svg?raw";
+  import ForgeIcon from "../../icons/servers/Forge.svg?raw";
+  import FoliaIcon from "../../icons/servers/Folia.svg?raw";
+  import VelocityIcon from "../../icons/servers/Velocity.svg?raw";
+  import WaterfallIcon from "../../icons/servers/Waterfall.svg?raw";
+  import BungeeCordIcon from "../../icons/servers/BungeeCord.svg?raw";
+  import VanillaIcon from "../../icons/Server.svg?raw";
   import {
     getServerProperties,
     saveServerProperties,
@@ -9,7 +19,7 @@
   } from "$lib/stores/servers.svelte";
   import { saveSettings, settingsState, updateSettings } from "$lib/stores/settings.svelte";
   import { i18nState, t } from "$lib/stores/i18n.svelte";
-  import type { AppSettings, ServerPropertyEntry } from "$lib/types";
+  import type { AppSettings, CoreType, ServerPropertyEntry } from "$lib/types";
 
   const defaultServerProperties: ServerPropertyEntry[] = [
     { key: "motd", value: "A Lodestone Minecraft Server" },
@@ -47,14 +57,63 @@
     { value: "hard", label: i18nState.language === "ru" ? "Сложная" : "Hard" },
   ]);
 
+  const proxyCores = new Set(["velocity", "waterfall", "bungeecord"]);
+  interface CoreVisual {
+    iconSvg: string;
+    color: string;
+  }
+
+  const coreVisuals: Record<CoreType, CoreVisual> = {
+    paper: { iconSvg: PaperIcon, color: "var(--core-paper)" },
+    purpur: { iconSvg: PurpurIcon, color: "var(--core-purpur)" },
+    fabric: { iconSvg: FabricIcon, color: "var(--core-fabric)" },
+    quilt: { iconSvg: QuiltIcon, color: "var(--core-quilt)" },
+    forge: { iconSvg: ForgeIcon, color: "var(--core-forge)" },
+    folia: { iconSvg: FoliaIcon, color: "var(--core-folia)" },
+    velocity: { iconSvg: VelocityIcon, color: "var(--core-velocity)" },
+    waterfall: { iconSvg: WaterfallIcon, color: "var(--core-waterfall)" },
+    bungeecord: { iconSvg: BungeeCordIcon, color: "var(--core-bungeecord)" },
+    vanilla: { iconSvg: VanillaIcon, color: "var(--core-vanilla)" },
+  };
+
   const serverOptions = $derived(
-    serverState.servers.map((server) => ({
-      value: server.id,
-      label: `${server.name} · ${server.core} ${server.version}`,
-    })),
+    serverState.servers
+      .filter((server) => !proxyCores.has(server.core))
+      .map((server) => ({
+        value: server.id,
+        label: `${server.name} · ${server.core} ${server.version}`,
+      })),
   );
+  const pickerServers = $derived.by(() => {
+    const query = pickerQuery.trim().toLowerCase();
+    return [...serverState.servers]
+      .filter((server) => !proxyCores.has(server.core))
+      .filter((server) => {
+        if (!query) {
+          return true;
+        }
+        return (
+          server.name.toLowerCase().includes(query) ||
+          server.core.toLowerCase().includes(query) ||
+          server.version.toLowerCase().includes(query)
+        );
+      })
+      .sort((a, b) => {
+        const runningDiff = Number(b.running) - Number(a.running);
+        if (runningDiff !== 0) {
+          return runningDiff;
+        }
+        return a.name.localeCompare(b.name);
+      });
+  });
+  const selectedServerLabel = $derived.by(() => {
+    const selected = serverOptions.find((option) => option.value === selectedServerId);
+    return selected?.label ?? t("settings_server_profile");
+  });
 
   let selectedServerId = $state("");
+  let pickerQuery = $state("");
+  let serverPickerEl: HTMLDetailsElement | null = null;
   let properties = $state<ServerPropertyEntry[]>([]);
   let propertiesLoading = $state(false);
   let propertiesSaving = $state(false);
@@ -170,6 +229,31 @@
     }
   }
 
+  function selectServerFromPicker(id: string): void {
+    selectedServerId = id;
+    pickerQuery = "";
+    serverPickerEl?.removeAttribute("open");
+  }
+
+  function handlePickerToggle(event: Event): void {
+    const details = event.currentTarget as HTMLDetailsElement;
+    if (!details.open) {
+      pickerQuery = "";
+    }
+  }
+
+  function handleWindowPointerDown(event: PointerEvent): void {
+    if (!serverPickerEl?.open) {
+      return;
+    }
+
+    const target = event.target;
+    if (target instanceof Node && !serverPickerEl.contains(target)) {
+      serverPickerEl.open = false;
+      pickerQuery = "";
+    }
+  }
+
   $effect(() => {
     if (serverOptions.length === 0) {
       selectedServerId = "";
@@ -190,6 +274,8 @@
     }
   });
 </script>
+
+<svelte:window onpointerdown={handleWindowPointerDown} />
 
 <section class="settings-page">
   {#if settingsState.error}
@@ -269,14 +355,51 @@
 
       <div class="server-picker">
         <span class="field-label">{t("settings_server_profile")}</span>
-        <CustomSelect
-          value={selectedServerId}
-          options={serverOptions}
-          placeholder={t("settings_server_profile")}
-          onChange={(value) => {
-            selectedServerId = value;
-          }}
-        />
+        <div class="server-picker-row">
+          <details class="tab-picker" bind:this={serverPickerEl} ontoggle={handlePickerToggle}>
+            <summary class="picker-toggle" aria-label={t("settings_server_profile")}>
+              +
+            </summary>
+            <div class="tab-picker-menu panel">
+              <div class="picker-search-row">
+                <input
+                  type="text"
+                  class="input picker-search"
+                  bind:value={pickerQuery}
+                  placeholder={t("console_tab_search_placeholder")}
+                />
+              </div>
+
+              <div class="picker-list">
+                {#if pickerServers.length === 0}
+                  <div class="picker-empty">{t("console_tab_search_empty")}</div>
+                {:else}
+                  {#each pickerServers as server (server.id)}
+                    <button
+                      type="button"
+                      class="picker-item"
+                      class:selected={server.id === selectedServerId}
+                      style={`--core-color:${coreVisuals[server.core].color}`}
+                      onclick={() => selectServerFromPicker(server.id)}
+                    >
+                      <span class="picker-core" aria-hidden="true">
+                        {@html coreVisuals[server.core].iconSvg}
+                      </span>
+
+                      <span class="tab-dot" class:running={server.running}></span>
+
+                      <span class="picker-main">
+                        <span class="picker-name">{server.name}</span>
+                        <span class="picker-meta">{server.core} · v{server.version}</span>
+                      </span>
+                    </button>
+                  {/each}
+                {/if}
+              </div>
+            </div>
+          </details>
+          <div class="picker-current">{selectedServerLabel}</div>
+        </div>
       </div>
     </header>
 
@@ -568,6 +691,184 @@
     gap: 6px;
   }
 
+  .server-picker-row {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .tab-picker {
+    position: relative;
+  }
+
+  .picker-toggle {
+    list-style: none;
+    user-select: none;
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border: 0.5px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    transition: border-color var(--tr), color var(--tr), background var(--tr);
+  }
+
+  .picker-toggle:hover {
+    color: var(--text);
+    border-color: var(--accent);
+    background: var(--surface-2);
+  }
+
+  .picker-toggle::-webkit-details-marker {
+    display: none;
+  }
+
+  .tab-picker[open] .picker-toggle {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent-bg) 70%, var(--surface));
+  }
+
+  .picker-current {
+    min-height: 36px;
+    border: 0.5px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 8px 10px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: var(--surface);
+  }
+
+  .tab-picker-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    width: clamp(290px, 48vw, 420px);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 40;
+    padding: 8px;
+  }
+
+  .picker-search-row {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--surface);
+    border-radius: var(--r-md);
+  }
+
+  .picker-search {
+    min-height: 34px;
+    padding: 7px 10px;
+    font-size: 12px;
+  }
+
+  .picker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: min(56vh, 420px);
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+
+  .picker-empty {
+    min-height: 36px;
+    border: 0.5px solid var(--border);
+    border-radius: var(--r-md);
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+  }
+
+  .picker-item {
+    border: 0.5px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    color: var(--text);
+    padding: 8px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .picker-item:hover {
+    border-color: var(--accent);
+    background: var(--surface-2);
+  }
+
+  .picker-item.selected {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent-bg) 70%, var(--surface));
+  }
+
+  .picker-core {
+    width: 15px;
+    height: 15px;
+    display: grid;
+    place-items: center;
+    color: var(--core-color);
+    flex-shrink: 0;
+  }
+
+  .picker-core :global(svg) {
+    width: 15px;
+    height: 15px;
+    display: block;
+  }
+
+  .tab-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--text-hint);
+  }
+
+  .tab-dot.running {
+    background: var(--success-color);
+  }
+
+  .picker-main {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .picker-name {
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .picker-meta {
+    width: 100%;
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-transform: lowercase;
+  }
+
   .empty-properties {
     color: var(--text-muted);
     font-size: 13px;
@@ -651,6 +952,11 @@
 
     .server-picker {
       width: 100%;
+    }
+
+    .tab-picker-menu {
+      width: min(88vw, 360px);
+      right: -4px;
     }
 
     .quick-grid {

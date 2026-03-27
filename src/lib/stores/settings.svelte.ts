@@ -2,12 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings } from "$lib/types";
 
 export const defaultSettings: AppSettings = {
-  java_path: "java",
-  max_ram_mb: 4096,
-  extra_jvm_flags: "",
   minimize_to_tray: false,
   autostart_servers: false,
-  kill_server_processes_on_exit: false,
+  kill_server_processes_on_exit: true,
 };
 
 interface SettingsStoreState {

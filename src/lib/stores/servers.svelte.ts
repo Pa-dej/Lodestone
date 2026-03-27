@@ -6,6 +6,7 @@ import type {
   CoreType,
   DownloadProgress,
   NewServerConfig,
+  RamLimits,
   ServerPropertyEntry,
   ServerConfig,
   UpdateServerProfileConfig,
@@ -27,6 +28,7 @@ interface ServerStoreState {
   restartingServers: string[];
   serverCommands: Record<string, string[]>;
   serverOrder: string[];
+  ramLimits: RamLimits;
 }
 
 const MAX_CONSOLE_LINES = 2500;
@@ -54,6 +56,11 @@ export const serverState = $state<ServerStoreState>({
   restartingServers: [],
   serverCommands: {},
   serverOrder: [],
+  ramLimits: {
+    min_mb: 512,
+    max_mb: 16384,
+    total_mb: 0,
+  },
 });
 
 let consoleLineUnlisten: UnlistenFn | null = null;
@@ -208,7 +215,24 @@ async function ensureEventListeners(): Promise<void> {
 
 export async function initServers(): Promise<void> {
   await ensureEventListeners();
+  await loadRamLimits();
   await loadServers();
+}
+
+export async function loadRamLimits(): Promise<void> {
+  try {
+    const limits = await invoke<RamLimits>("get_ram_limits");
+    if (
+      Number.isFinite(limits.min_mb) &&
+      Number.isFinite(limits.max_mb) &&
+      limits.min_mb > 0 &&
+      limits.max_mb >= limits.min_mb
+    ) {
+      serverState.ramLimits = limits;
+    }
+  } catch (error) {
+    console.warn("Failed to load RAM limits:", error);
+  }
 }
 
 export async function loadServers(): Promise<void> {
@@ -371,6 +395,15 @@ export async function sendServerCommand(id: string, command: string): Promise<bo
   } catch (error) {
     setServerError(error);
     return false;
+  }
+}
+
+export async function getServerMotd(id: string): Promise<string> {
+  try {
+    return await invoke<string>("get_server_motd", { id });
+  } catch (error) {
+    setServerError(error);
+    return "A Lodestone Minecraft Server";
   }
 }
 

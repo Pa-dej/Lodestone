@@ -40,15 +40,19 @@ export interface UpdateServerProfileConfig {
   port: number;
   ram_mb: number;
   jvm_args: string;
+  motd?: string;
 }
 
 export interface AppSettings {
-  java_path: string;
-  max_ram_mb: number;
-  extra_jvm_flags: string;
   minimize_to_tray: boolean;
   autostart_servers: boolean;
   kill_server_processes_on_exit: boolean;
+}
+
+export interface RamLimits {
+  min_mb: number;
+  max_mb: number;
+  total_mb: number;
 }
 
 export interface ServerPropertiesConfig {

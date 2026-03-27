@@ -91,7 +91,7 @@
 </script>
 
 <header class="app-topbar">
-  <div>
+  <div class="topbar-page">
     <div class="topbar-title">{pageLabel}</div>
   </div>
 
@@ -150,6 +150,14 @@
     line-height: 1;
     margin-top: 3px;
     user-select: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .topbar-page {
+    min-width: 0;
+    flex: 1 1 auto;
   }
 
   .topbar-controls {
@@ -157,6 +165,7 @@
     gap: 6px;
     align-items: center;
     user-select: none;
+    flex: 0 0 auto;
   }
 
   .carousel-theme-btn {
@@ -213,6 +222,11 @@
   }
 
   @media (max-width: 760px) {
+    .app-topbar {
+      padding-inline: 10px;
+      gap: 8px;
+    }
+
     .topbar-title {
       font-size: 16px;
       margin-top: 0;
@@ -222,6 +236,24 @@
       min-width: 44px;
       padding: 6px 8px;
       font-size: 10px;
+    }
+  }
+
+  @media (max-width: 560px) {
+    .topbar-title {
+      font-size: 14px;
+    }
+
+    .carousel-theme-btn {
+      width: 32px;
+      height: 32px;
+    }
+
+    .lang-btn {
+      min-width: 38px;
+      padding: 5px 6px;
+      font-size: 10px;
+      letter-spacing: 0.03em;
     }
   }
 </style>

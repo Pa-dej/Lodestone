@@ -95,7 +95,8 @@
 
   .shell-content {
     min-width: 0;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
     padding: 16px;
     display: flex;
     flex-direction: column;
@@ -119,6 +120,16 @@
 
     .shell-content {
       padding: 10px;
+    }
+  }
+
+  @media (max-width: 520px) {
+    .app-shell {
+      grid-template-columns: 56px 1fr;
+    }
+
+    .shell-content {
+      padding: 8px;
     }
   }
 </style>

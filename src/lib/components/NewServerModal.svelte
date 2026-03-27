@@ -151,6 +151,9 @@
 
   const serverCoreOptions = $derived(coreOptions.filter((option) => option.group === "server"));
   const proxyCoreOptions = $derived(coreOptions.filter((option) => option.group === "proxy"));
+  const isProxyCore = $derived(["velocity", "waterfall", "bungeecord"].includes(selectedCore));
+  const minRamMb = $derived(Math.max(512, serverState.ramLimits.min_mb || 512));
+  const maxRamMb = $derived(Math.max(minRamMb, serverState.ramLimits.max_mb || 16384));
 
   const releaseVersionPattern = /^(?:\d+\.\d+(?:\.\d+){0,2}|\d{2}\.\d{2}(?:\.\d+)?)$/;
 
@@ -294,7 +297,7 @@
     selectedVersion = "";
     releaseOnly = true;
     port = 25565;
-    ramMb = 2048;
+    ramMb = Math.min(maxRamMb, Math.max(minRamMb, 2048));
     jvmArgs = "";
     motd = "A Lodestone Minecraft Server";
     gamemode = "survival";
@@ -311,8 +314,19 @@
   }
 
   async function submitCreation(): Promise<void> {
+    const normalizedName = serverName.trim();
+    if (!normalizedName) {
+      modalError = t("field_server_name");
+      return;
+    }
+
     if (!selectedVersion) {
       modalError = t("modal_select_version_error");
+      return;
+    }
+
+    if (!Number.isFinite(ramMb) || ramMb < minRamMb || ramMb > maxRamMb) {
+      modalError = `${t("field_ram_mb")}: ${minRamMb}-${maxRamMb}`;
       return;
     }
 
@@ -322,11 +336,11 @@
     currentStep = 2;
 
     const payload: NewServerConfig = {
-      name: serverName.trim(),
+      name: normalizedName,
       core: selectedCore,
       version: selectedVersion,
       port,
-      ram_mb: ramMb,
+      ram_mb: Math.round(ramMb),
       jvm_args: jvmArgs.trim(),
       properties: {
         motd: motd.trim() || "A Lodestone Minecraft Server",
@@ -505,7 +519,7 @@
           <div class="field">
             <span class="field-label">{t("field_ram_mb")}</span>
             <div class="slider-row">
-              <input class="range-input" type="range" min={512} max={16384} step={256} bind:value={ramMb} />
+              <input class="range-input" type="range" min={minRamMb} max={maxRamMb} step={256} bind:value={ramMb} />
               <span class="tag">{ramMb} MB</span>
             </div>
           </div>
@@ -520,50 +534,52 @@
             <input class="input" bind:value={motd} placeholder="A Lodestone Minecraft Server" />
           </label>
 
-          <div class="field">
-            <span class="field-label">{t("field_gamemode")}</span>
-            <CustomSelect
-              value={gamemode}
-              options={gamemodeOptions}
-              onChange={(value) => {
-                gamemode = value as typeof gamemode;
-              }}
-            />
-          </div>
-
-          <div class="field">
-            <span class="field-label">{t("field_difficulty")}</span>
-            <CustomSelect
-              value={difficulty}
-              options={difficultyOptions}
-              onChange={(value) => {
-                difficulty = value as typeof difficulty;
-              }}
-            />
-          </div>
-
-          <div class="field span-2">
-            <span class="field-label">{t("field_view_distance")}</span>
-            <div class="slider-row">
-              <input class="range-input" type="range" min={3} max={32} step={1} bind:value={viewDistance} />
-              <span class="tag">{viewDistance} {t("unit_chunks")}</span>
+          {#if !isProxyCore}
+            <div class="field">
+              <span class="field-label">{t("field_gamemode")}</span>
+              <CustomSelect
+                value={gamemode}
+                options={gamemodeOptions}
+                onChange={(value) => {
+                  gamemode = value as typeof gamemode;
+                }}
+              />
             </div>
-          </div>
 
-          <div class="field span-2 toggles-inline">
-            <Toggle
-              label={t("field_online_mode")}
-              description={t("field_online_mode_desc")}
-              checked={onlineMode}
-              onToggle={(value) => (onlineMode = value)}
-            />
-            <Toggle
-              label={t("field_pvp")}
-              description={t("field_pvp_desc")}
-              checked={pvpEnabled}
-              onToggle={(value) => (pvpEnabled = value)}
-            />
-          </div>
+            <div class="field">
+              <span class="field-label">{t("field_difficulty")}</span>
+              <CustomSelect
+                value={difficulty}
+                options={difficultyOptions}
+                onChange={(value) => {
+                  difficulty = value as typeof difficulty;
+                }}
+              />
+            </div>
+
+            <div class="field span-2">
+              <span class="field-label">{t("field_view_distance")}</span>
+              <div class="slider-row">
+                <input class="range-input" type="range" min={3} max={32} step={1} bind:value={viewDistance} />
+                <span class="tag">{viewDistance} {t("unit_chunks")}</span>
+              </div>
+            </div>
+
+            <div class="field span-2 toggles-inline">
+              <Toggle
+                label={t("field_online_mode")}
+                description={t("field_online_mode_desc")}
+                checked={onlineMode}
+                onToggle={(value) => (onlineMode = value)}
+              />
+              <Toggle
+                label={t("field_pvp")}
+                description={t("field_pvp_desc")}
+                checked={pvpEnabled}
+                onToggle={(value) => (pvpEnabled = value)}
+              />
+            </div>
+          {/if}
         </div>
 
         {#if modalError}

@@ -143,6 +143,17 @@
             class:active={serverState.activeConsoleServer === tab.id}
             style={`--core-color:${coreVisuals[tab.core].color}`}
             onclick={() => activateTab(tab.id)}
+            onmousedown={(event) => {
+              if (event.button === 1) {
+                event.preventDefault();
+              }
+            }}
+            onauxclick={(event) => {
+              if (event.button === 1) {
+                event.preventDefault();
+                removeTab(tab.id);
+              }
+            }}
             title={tab.name}
           >
             <span class="tab-core" aria-hidden="true">
@@ -265,11 +276,12 @@
   }
 
   .tabs-track {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
-    min-width: 0;
     width: 100%;
+    min-width: 0;
   }
 
   .tab-list {
@@ -277,10 +289,11 @@
     align-items: center;
     gap: 8px;
     overflow-x: auto;
+    overflow-y: hidden;
     padding-bottom: 2px;
-    max-width: 100%;
+    width: 100%;
     min-width: 0;
-    flex: 1 1 auto;
+    max-width: none;
   }
 
   .empty-tabs {
@@ -383,8 +396,7 @@
 
   .tab-picker {
     position: relative;
-    flex: 0 0 auto;
-    align-self: center;
+    justify-self: end;
   }
 
   .picker-toggle {

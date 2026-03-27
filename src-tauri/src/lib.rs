@@ -175,6 +175,8 @@ pub struct UpdateServerProfileConfig {
     ram_mb: u32,
     #[serde(default)]
     jvm_args: String,
+    #[serde(default)]
+    motd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,26 +211,48 @@ impl Default for ServerPropertiesConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
+    #[serde(skip_serializing, default = "default_java_path")]
     java_path: String,
+    #[serde(skip_serializing, default = "default_max_ram_mb")]
     max_ram_mb: u32,
+    #[serde(skip_serializing, default)]
     extra_jvm_flags: String,
     minimize_to_tray: bool,
     autostart_servers: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     kill_server_processes_on_exit: bool,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            java_path: String::from("java"),
-            max_ram_mb: 4096,
+            java_path: default_java_path(),
+            max_ram_mb: default_max_ram_mb(),
             extra_jvm_flags: String::new(),
             minimize_to_tray: false,
             autostart_servers: false,
-            kill_server_processes_on_exit: false,
+            kill_server_processes_on_exit: true,
         }
     }
+}
+
+fn default_java_path() -> String {
+    String::from("java")
+}
+
+fn default_max_ram_mb() -> u32 {
+    16_384
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RamLimits {
+    min_mb: u32,
+    max_mb: u32,
+    total_mb: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -265,6 +289,7 @@ struct RunningServer {
     #[allow(dead_code)]
     console_tx: mpsc::Sender<ConsoleEvent>,
     recent_lines: Arc<SyncRwLock<VecDeque<Arc<str>>>>,
+    core: String,
 }
 
 #[derive(Clone, Default)]
@@ -272,6 +297,29 @@ struct AppState {
     running: Arc<AsyncMutex<HashMap<String, RunningServer>>>,
     servers_cache: Arc<SyncRwLock<Option<Vec<ServerConfig>>>>,
     tracked_server_pids: Arc<SyncRwLock<HashMap<String, u32>>>,
+}
+
+const MIN_SERVER_RAM_MB: u32 = 512;
+const MAX_SERVER_RAM_MB: u32 = 262_144;
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct MemoryStatusEx {
+    dw_length: u32,
+    dw_memory_load: u32,
+    ull_total_phys: u64,
+    ull_avail_phys: u64,
+    ull_total_page_file: u64,
+    ull_avail_page_file: u64,
+    ull_total_virtual: u64,
+    ull_avail_virtual: u64,
+    ull_avail_extended_virtual: u64,
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GlobalMemoryStatusEx(buffer: *mut MemoryStatusEx) -> i32;
 }
 
 fn now_timestamp_secs() -> u64 {
@@ -548,6 +596,78 @@ fn kill_tracked_server_processes_if_needed(state: &AppState) {
     }
 
     state.tracked_server_pids.write().clear();
+}
+
+#[cfg(target_os = "windows")]
+fn total_physical_memory_bytes() -> Option<u64> {
+    let mut status = MemoryStatusEx {
+        dw_length: std::mem::size_of::<MemoryStatusEx>() as u32,
+        dw_memory_load: 0,
+        ull_total_phys: 0,
+        ull_avail_phys: 0,
+        ull_total_page_file: 0,
+        ull_avail_page_file: 0,
+        ull_total_virtual: 0,
+        ull_avail_virtual: 0,
+        ull_avail_extended_virtual: 0,
+    };
+
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status as *mut MemoryStatusEx) };
+    if ok == 0 {
+        None
+    } else {
+        Some(status.ull_total_phys)
+    }
+}
+
+#[cfg(unix)]
+fn total_physical_memory_bytes() -> Option<u64> {
+    let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGE_SIZE) };
+
+    if pages <= 0 || page_size <= 0 {
+        return None;
+    }
+
+    Some((pages as u64).saturating_mul(page_size as u64))
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn total_physical_memory_bytes() -> Option<u64> {
+    None
+}
+
+fn server_ram_limits() -> RamLimits {
+    let total_mb = total_physical_memory_bytes()
+        .map(|bytes| bytes / (1024 * 1024))
+        .unwrap_or(0)
+        .min(u32::MAX as u64) as u32;
+
+    let detected_max = if total_mb > 0 {
+        let reserve_mb = if total_mb >= 8_192 { 1_024 } else { 512 };
+        total_mb.saturating_sub(reserve_mb)
+    } else {
+        default_max_ram_mb()
+    };
+
+    let max_mb = detected_max.clamp(MIN_SERVER_RAM_MB, MAX_SERVER_RAM_MB);
+    RamLimits {
+        min_mb: MIN_SERVER_RAM_MB,
+        max_mb,
+        total_mb,
+    }
+}
+
+fn validate_server_ram_mb(requested_mb: u32) -> Result<u32, String> {
+    let limits = server_ram_limits();
+    if requested_mb < limits.min_mb || requested_mb > limits.max_mb {
+        return Err(format!(
+            "RAM must be between {} and {} MB for this device",
+            limits.min_mb, limits.max_mb
+        ));
+    }
+
+    Ok(requested_mb.clamp(limits.min_mb, limits.max_mb))
 }
 
 fn java_exec(settings: &AppSettings) -> String {
@@ -1394,8 +1514,330 @@ fn resolve_launch_jar_name(server_dir: &Path, core: &str) -> String {
     String::from("server.jar")
 }
 
+fn is_proxy_core(core: &str) -> bool {
+    matches!(core, "velocity" | "waterfall" | "bungeecord")
+}
+
 fn core_uses_nogui(core: &str) -> bool {
-    !matches!(core, "velocity" | "waterfall" | "bungeecord")
+    !is_proxy_core(core)
+}
+
+fn map_proxy_command(core: &str, command: &str) -> String {
+    let normalized = command.trim();
+    if normalized.is_empty() {
+        return String::new();
+    }
+
+    if core.eq_ignore_ascii_case("velocity") && normalized.eq_ignore_ascii_case("stop") {
+        return String::from("shutdown");
+    }
+
+    if (core.eq_ignore_ascii_case("bungeecord") || core.eq_ignore_ascii_case("waterfall"))
+        && normalized.eq_ignore_ascii_case("stop")
+    {
+        return String::from("end");
+    }
+
+    String::from(normalized)
+}
+
+fn escape_toml_string(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', " ")
+        .replace('\r', " ")
+}
+
+fn escape_yaml_double_quoted(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', " ")
+        .replace('\r', " ")
+}
+
+async fn write_proxy_bootstrap_files(
+    server_dir: &Path,
+    core: &str,
+    port: u16,
+    motd: &str,
+) -> Result<(), String> {
+    if core == "velocity" {
+        let escaped_motd = escape_toml_string(motd);
+        let body = format!(
+            "config-version = \"2.7\"\n\
+             bind = \"0.0.0.0:{port}\"\n\
+             motd = \"{escaped_motd}\"\n\
+             show-max-players = 500\n\
+             online-mode = true\n\
+             force-key-authentication = true\n\
+             player-info-forwarding-mode = \"NONE\"\n\
+             forwarding-secret-file = \"forwarding.secret\"\n\
+             announce-forge = false\n\
+             kick-existing-players = false\n\
+             ping-passthrough = \"DISABLED\"\n\
+             enable-player-address-logging = true\n\
+             [servers]\n\
+             lobby = \"127.0.0.1:25566\"\n\
+             try = [\"lobby\"]\n\
+             [forced-hosts]\n\
+             [advanced]\n\
+             compression-threshold = 256\n\
+             compression-level = -1\n\
+             login-ratelimit = 3000\n\
+             connection-timeout = 5000\n\
+             read-timeout = 30000\n\
+             haproxy-protocol = false\n\
+             tcp-fast-open = false\n\
+             bungee-plugin-message-channel = true\n\
+             show-ping-requests = false\n\
+             failover-on-unexpected-server-disconnect = true\n\
+             announce-proxy-commands = true\n\
+             log-command-executions = false\n\
+             log-player-connections = true\n\
+             accepts-transfers = false\n"
+        );
+        let config_path = server_dir.join("velocity.toml");
+        tokio_fs::write(&config_path, body)
+            .await
+            .map_err(|err| format!("Failed to write {}: {err}", config_path.display()))?;
+        return Ok(());
+    }
+
+    if core == "waterfall" || core == "bungeecord" {
+        let escaped_motd = escape_yaml_double_quoted(motd);
+        let body = format!(
+            "listeners:\n\
+             - query_port: {port}\n\
+               motd: \"{escaped_motd}\"\n\
+               tab_list: GLOBAL_PING\n\
+               query_enabled: false\n\
+               proxy_protocol: false\n\
+               ping_passthrough: false\n\
+               priorities:\n\
+                 - lobby\n\
+               bind_local_address: true\n\
+               host: 0.0.0.0:{port}\n\
+               max_players: 100\n\
+               tab_size: 60\n\
+               force_default_server: false\n\
+             remote_ping_cache: -1\n\
+             network_compression_threshold: 256\n\
+             permissions:\n\
+               default:\n\
+                 - bungeecord.command.server\n\
+                 - bungeecord.command.list\n\
+               admin:\n\
+                 - bungeecord.command.alert\n\
+                 - bungeecord.command.end\n\
+             log_pings: true\n\
+             connection_throttle_limit: 3\n\
+             prevent_proxy_connections: false\n\
+             timeout: 30000\n\
+             player_limit: -1\n\
+             ip_forward: true\n\
+             groups:\n\
+               md_5:\n\
+                 - admin\n\
+             remote_ping_timeout: 5000\n\
+             connection_throttle: 4000\n\
+             log_commands: false\n\
+             online_mode: true\n\
+             forge_support: true\n\
+             disabled_commands:\n\
+               - disabledcommandhere\n"
+        );
+        let config_path = server_dir.join("config.yml");
+        tokio_fs::write(&config_path, body)
+            .await
+            .map_err(|err| format!("Failed to write {}: {err}", config_path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn replace_or_append_prefixed_line(content: &str, prefix: &str, replacement: &str) -> String {
+    let mut replaced = false;
+    let mut out = Vec::<String>::new();
+    for line in content.lines() {
+        if !replaced && line.trim_start().starts_with(prefix) {
+            let leading_len = line.len() - line.trim_start().len();
+            let leading = &line[..leading_len];
+            out.push(format!("{leading}{replacement}"));
+            replaced = true;
+        } else {
+            out.push(line.to_string());
+        }
+    }
+
+    if !replaced {
+        out.push(replacement.to_string());
+    }
+
+    let mut joined = out.join("\n");
+    if !joined.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+fn extract_velocity_motd(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("motd") {
+            continue;
+        }
+        let Some((_, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        let cleaned = value.trim().trim_matches('"').trim_matches('\'').trim();
+        if !cleaned.is_empty() {
+            return Some(cleaned.to_string());
+        }
+    }
+    None
+}
+
+fn extract_bungee_like_motd(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("motd:") {
+            continue;
+        }
+        let value = trimmed.trim_start_matches("motd:").trim();
+        let cleaned = value.trim_matches('"').trim_matches('\'').trim();
+        if !cleaned.is_empty() {
+            return Some(cleaned.to_string());
+        }
+    }
+    None
+}
+
+async fn sync_proxy_runtime_config(
+    server_dir: &Path,
+    core: &str,
+    port: u16,
+    motd_override: Option<&str>,
+) -> Result<(), String> {
+    let default_motd = "A Lodestone Minecraft Server";
+
+    if core == "velocity" {
+        let path = server_dir.join("velocity.toml");
+        let existing = if path.exists() {
+            tokio_fs::read_to_string(&path)
+                .await
+                .map_err(|err| format!("Failed to read {}: {err}", path.display()))?
+        } else {
+            String::new()
+        };
+
+        let final_motd = sanitized_property_value(
+            motd_override.unwrap_or(
+                extract_velocity_motd(&existing)
+                    .as_deref()
+                    .unwrap_or(default_motd),
+            ),
+        );
+
+        if existing.trim().is_empty() {
+            return write_proxy_bootstrap_files(server_dir, core, port, &final_motd).await;
+        }
+
+        let with_bind = replace_or_append_prefixed_line(
+            &existing,
+            "bind",
+            &format!("bind = \"0.0.0.0:{port}\""),
+        );
+        let with_motd = replace_or_append_prefixed_line(
+            &with_bind,
+            "motd",
+            &format!("motd = \"{}\"", escape_toml_string(&final_motd)),
+        );
+
+        tokio_fs::write(&path, with_motd)
+            .await
+            .map_err(|err| format!("Failed to write {}: {err}", path.display()))?;
+        return Ok(());
+    }
+
+    if core == "waterfall" || core == "bungeecord" {
+        let path = server_dir.join("config.yml");
+        let existing = if path.exists() {
+            tokio_fs::read_to_string(&path)
+                .await
+                .map_err(|err| format!("Failed to read {}: {err}", path.display()))?
+        } else {
+            String::new()
+        };
+
+        let final_motd = sanitized_property_value(
+            motd_override.unwrap_or(
+                extract_bungee_like_motd(&existing)
+                    .as_deref()
+                    .unwrap_or(default_motd),
+            ),
+        );
+
+        if existing.trim().is_empty() {
+            return write_proxy_bootstrap_files(server_dir, core, port, &final_motd).await;
+        }
+
+        let with_host = replace_or_append_prefixed_line(
+            &existing,
+            "host:",
+            &format!("host: 0.0.0.0:{port}"),
+        );
+        let with_query_port = replace_or_append_prefixed_line(
+            &with_host,
+            "query_port:",
+            &format!("query_port: {port}"),
+        );
+        let with_motd = replace_or_append_prefixed_line(
+            &with_query_port,
+            "motd:",
+            &format!("motd: \"{}\"", escape_yaml_double_quoted(&final_motd)),
+        );
+
+        tokio_fs::write(&path, with_motd)
+            .await
+            .map_err(|err| format!("Failed to write {}: {err}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+async fn load_server_motd(server: &ServerConfig) -> String {
+    if is_proxy_core(&server.core) {
+        if server.core == "velocity" {
+            let path = server.path.join("velocity.toml");
+            if let Ok(content) = tokio_fs::read_to_string(&path).await {
+                if let Some(value) = extract_velocity_motd(&content) {
+                    return value;
+                }
+            }
+        } else if server.core == "waterfall" || server.core == "bungeecord" {
+            let path = server.path.join("config.yml");
+            if let Ok(content) = tokio_fs::read_to_string(&path).await {
+                if let Some(value) = extract_bungee_like_motd(&content) {
+                    return value;
+                }
+            }
+        }
+
+        return String::from("A Lodestone Minecraft Server");
+    }
+
+    let path = server.path.join("server.properties");
+    if let Ok(content) = tokio_fs::read_to_string(&path).await {
+        for entry in parse_server_properties(&content) {
+            if entry.key.eq_ignore_ascii_case("motd") {
+                return entry.value;
+            }
+        }
+    }
+
+    String::from("A Lodestone Minecraft Server")
 }
 
 async fn write_start_scripts(
@@ -1480,33 +1922,38 @@ async fn write_bootstrap_files(
         .await
         .map_err(|err| format!("Failed to write {}: {err}", eula_path.display()))?;
 
-    let props_path = server_dir.join("server.properties");
-    let gamemode = normalized_enum(
-        &properties.gamemode,
-        &["survival", "creative", "adventure", "spectator"],
-        "survival",
-    );
-    let difficulty = normalized_enum(
-        &properties.difficulty,
-        &["peaceful", "easy", "normal", "hard"],
-        "normal",
-    );
-    let view_distance = properties.view_distance.clamp(3, 32);
     let motd = sanitized_property_value(&properties.motd);
 
-    let props_body = format!(
-        "server-port={port}\n\
-         motd={motd}\n\
-         gamemode={gamemode}\n\
-         difficulty={difficulty}\n\
-         online-mode={}\n\
-         pvp={}\n\
-         view-distance={view_distance}\n",
-        properties.online_mode, properties.pvp
-    );
-    tokio_fs::write(&props_path, props_body)
-        .await
-        .map_err(|err| format!("Failed to write {}: {err}", props_path.display()))?;
+    if is_proxy_core(core) {
+        write_proxy_bootstrap_files(server_dir, core, port, &motd).await?;
+    } else {
+        let props_path = server_dir.join("server.properties");
+        let gamemode = normalized_enum(
+            &properties.gamemode,
+            &["survival", "creative", "adventure", "spectator"],
+            "survival",
+        );
+        let difficulty = normalized_enum(
+            &properties.difficulty,
+            &["peaceful", "easy", "normal", "hard"],
+            "normal",
+        );
+        let view_distance = properties.view_distance.clamp(3, 32);
+
+        let props_body = format!(
+            "server-port={port}\n\
+             motd={motd}\n\
+             gamemode={gamemode}\n\
+             difficulty={difficulty}\n\
+             online-mode={}\n\
+             pvp={}\n\
+             view-distance={view_distance}\n",
+            properties.online_mode, properties.pvp
+        );
+        tokio_fs::write(&props_path, props_body)
+            .await
+            .map_err(|err| format!("Failed to write {}: {err}", props_path.display()))?;
+    }
 
     write_start_scripts(server_dir, settings, ram_mb, core, jvm_args).await?;
 
@@ -2173,6 +2620,8 @@ async fn create_server(
         return Err(String::from("Server version is required"));
     }
 
+    let normalized_ram = validate_server_ram_mb(config.ram_mb)?;
+
     let id = Uuid::new_v4().to_string();
     let server_name = server_name_or_default(&config.name);
     let dir_name = generate_server_directory_name(&server_name, &core, version);
@@ -2222,7 +2671,7 @@ async fn create_server(
     write_bootstrap_files(
         &server_dir,
         &settings,
-        config.ram_mb,
+        normalized_ram,
         &core,
         config.port,
         &config.properties,
@@ -2236,7 +2685,7 @@ async fn create_server(
         core,
         version: String::from(version),
         port: config.port,
-        ram_mb: config.ram_mb,
+        ram_mb: normalized_ram,
         jvm_args: sanitized_jvm_args(&config.jvm_args),
         path: server_dir,
         running: false,
@@ -2291,8 +2740,9 @@ async fn start_server(
 
     let settings = load_settings_from_disk().await.unwrap_or_default();
     let java = java_exec(&settings);
-    let ram_limit = settings.max_ram_mb.max(256);
-    let ram_mb = server.ram_mb.min(ram_limit);
+    let limits = server_ram_limits();
+    let ram_limit = settings.max_ram_mb.clamp(limits.min_mb, limits.max_mb);
+    let ram_mb = server.ram_mb.clamp(limits.min_mb, ram_limit);
     let extra_flags = split_jvm_flags(&settings.extra_jvm_flags);
     let profile_flags = split_jvm_flags(&server.jvm_args);
 
@@ -2304,12 +2754,12 @@ async fn start_server(
 
     #[cfg(not(unix))]
     {
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .arg("-Djline.terminal=dumb")
-            .arg("-Dorg.jline.terminal.type=dumb");
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        if !is_proxy_core(&server.core) {
+            command
+                .arg("-Djline.terminal=dumb")
+                .arg("-Dorg.jline.terminal.type=dumb");
+        }
     }
 
     for flag in extra_flags {
@@ -2395,6 +2845,7 @@ async fn start_server(
         stdin: Arc::new(AsyncMutex::new(stdin)),
         console_tx: console_tx.clone(),
         recent_lines: recent_lines.clone(),
+        core: server.core.clone(),
     };
 
     {
@@ -2448,15 +2899,28 @@ async fn stop_server(state: State<'_, AppState>, id: String) -> Result<(), Strin
         return Err(String::from("Server is not running"));
     };
 
-    let mut stdin = server.stdin.lock().await;
-    stdin
-        .write_all(b"stop\n")
+    let stop_command = map_proxy_command(&server.core, "stop");
+    let command_bytes = format!("{stop_command}\n");
+
+    #[cfg(unix)]
+    server
+        .pty_master
+        .write_all(command_bytes.as_bytes())
         .await
         .map_err(|err| format!("Failed to send stop command: {err}"))?;
-    stdin
-        .flush()
-        .await
-        .map_err(|err| format!("Failed to flush server stdin: {err}"))?;
+
+    #[cfg(not(unix))]
+    {
+        let mut stdin = server.stdin.lock().await;
+        stdin
+            .write_all(command_bytes.as_bytes())
+            .await
+            .map_err(|err| format!("Failed to send stop command: {err}"))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|err| format!("Failed to flush server stdin: {err}"))?;
+    }
 
     Ok(())
 }
@@ -2506,11 +2970,61 @@ async fn update_server_profile(
     };
 
     let normalized_name = server_name_or_default(&config.name);
-    let normalized_ram = config.ram_mb.clamp(256, 262_144);
+    let normalized_ram = validate_server_ram_mb(config.ram_mb)?;
     let current_port = servers[index].port;
 
     if config.port != current_port {
         ensure_server_port_available(config.port)?;
+    }
+
+    if running_now && normalized_name != servers[index].name {
+        return Err(String::from(
+            "Stop the server before renaming it to update folder path safely",
+        ));
+    }
+
+    if normalized_name != servers[index].name {
+        let current_path = servers[index].path.clone();
+        let parent_dir = current_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| servers_root_dir().unwrap_or_else(|_| current_path.clone()));
+
+        let mut next_path = parent_dir.join(generate_server_directory_name(
+            &normalized_name,
+            &servers[index].core,
+            &servers[index].version,
+        ));
+
+        if next_path != current_path {
+            let mut suffix = 1u32;
+            while next_path.exists() {
+                next_path = parent_dir.join(format!(
+                    "{}-{}",
+                    generate_server_directory_name(
+                        &normalized_name,
+                        &servers[index].core,
+                        &servers[index].version
+                    ),
+                    suffix
+                ));
+                suffix = suffix.saturating_add(1);
+                if suffix > 10_000 {
+                    return Err(String::from("Failed to find available target folder name"));
+                }
+            }
+
+            tokio_fs::rename(&current_path, &next_path)
+                .await
+                .map_err(|err| {
+                    format!(
+                        "Failed to rename server directory {} -> {}: {err}",
+                        current_path.display(),
+                        next_path.display()
+                    )
+                })?;
+            servers[index].path = next_path;
+        }
     }
 
     servers[index].name = normalized_name;
@@ -2521,7 +3035,17 @@ async fn update_server_profile(
 
     let updated = servers[index].clone();
 
-    upsert_server_property(&updated.path, "server-port", &updated.port.to_string()).await?;
+    if is_proxy_core(&updated.core) {
+        sync_proxy_runtime_config(
+            &updated.path,
+            &updated.core,
+            updated.port,
+            config.motd.as_deref(),
+        )
+        .await?;
+    } else {
+        upsert_server_property(&updated.path, "server-port", &updated.port.to_string()).await?;
+    }
     let settings = load_settings_from_disk().await.unwrap_or_default();
     write_start_scripts(
         &updated.path,
@@ -2583,6 +3107,17 @@ async fn open_server_folder(state: State<'_, AppState>, id: String) -> Result<()
 }
 
 #[tauri::command]
+async fn get_server_motd(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    let server = load_servers_cached(&state)
+        .await?
+        .into_iter()
+        .find(|item| item.id == id)
+        .ok_or_else(|| String::from("Server not found"))?;
+
+    Ok(load_server_motd(&server).await)
+}
+
+#[tauri::command]
 async fn get_server_properties(
     state: State<'_, AppState>,
     id: String,
@@ -2592,6 +3127,12 @@ async fn get_server_properties(
         .into_iter()
         .find(|item| item.id == id)
         .ok_or_else(|| String::from("Server not found"))?;
+
+    if is_proxy_core(&server.core) {
+        return Err(String::from(
+            "server.properties editing is not supported for proxy cores",
+        ));
+    }
 
     let properties_path = server.path.join("server.properties");
     if !properties_path.exists() {
@@ -2621,6 +3162,12 @@ async fn save_server_properties(
         .into_iter()
         .find(|item| item.id == id)
         .ok_or_else(|| String::from("Server not found"))?;
+
+    if is_proxy_core(&server.core) {
+        return Err(String::from(
+            "server.properties editing is not supported for proxy cores",
+        ));
+    }
 
     let mut normalized = Vec::<ServerPropertyEntry>::new();
     for entry in entries {
@@ -2702,7 +3249,8 @@ async fn send_command(
         return Err(String::from("Server is not running"));
     };
 
-    let cmd_bytes = format!("{normalized_command}\n");
+    let effective_command = map_proxy_command(&server.core, normalized_command);
+    let cmd_bytes = format!("{effective_command}\n");
 
     #[cfg(unix)]
     server
@@ -3088,6 +3636,11 @@ async fn get_settings() -> AppSettings {
 }
 
 #[tauri::command]
+async fn get_ram_limits() -> RamLimits {
+    server_ram_limits()
+}
+
+#[tauri::command]
 async fn save_settings(settings: AppSettings) -> Result<(), String> {
     save_settings_to_disk(&settings).await
 }
@@ -3116,6 +3669,10 @@ pub fn run() {
                 }
             }
 
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_title("Lodestone");
+            }
+
             let show_item =
                 tauri::menu::MenuItem::with_id(app, "show", "Open Lodestone", true, None::<&str>)?;
             let quit_item =
@@ -3123,7 +3680,7 @@ pub fn run() {
             let menu = tauri::menu::Menu::with_items(app, &[&show_item, &quit_item])?;
 
             let app_handle = app.handle().clone();
-            let _ = tauri::tray::TrayIconBuilder::new()
+            let mut tray_builder = tauri::tray::TrayIconBuilder::new()
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "show" => {
@@ -3138,8 +3695,13 @@ pub fn run() {
                         app_handle.exit(0);
                     }
                     _ => {}
-                })
-                .build(app)?;
+                });
+
+            if let Some(icon) = app.default_window_icon() {
+                tray_builder = tray_builder.icon(icon.clone());
+            }
+
+            let _ = tray_builder.build(app)?;
 
             Ok(())
         })
@@ -3162,6 +3724,7 @@ pub fn run() {
             delete_server,
             update_server_profile,
             open_server_folder,
+            get_server_motd,
             get_server_properties,
             save_server_properties,
             attach_console,
@@ -3170,6 +3733,7 @@ pub fn run() {
             get_server_stats,
             fetch_versions,
             get_settings,
+            get_ram_limits,
             save_settings
         ])
         .run(tauri::generate_context!())

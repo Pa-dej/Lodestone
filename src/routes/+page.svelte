@@ -14,6 +14,7 @@
     stopServer, 
     restartServer, 
     deleteServer,
+    getServerMotd,
     updateServerProfile,
     getOrderedServers,
     updateServerOrder
@@ -25,6 +26,7 @@
   let isModalOpen = $state(false);
   let isEditModalOpen = $state(false);
   let editingServer = $state<ServerConfig | null>(null);
+  let editingMotd = $state("A Lodestone Minecraft Server");
   let deleteModalOpen = $state(false);
   let deletingServer = $state<ServerConfig | null>(null);
   let deleteInProgress = $state(false);
@@ -65,14 +67,20 @@
     isModalOpen = false;
   }
 
-  function requestEdit(server: ServerConfig): void {
+  async function requestEdit(server: ServerConfig): Promise<void> {
     editingServer = server;
     isEditModalOpen = true;
+    if (["velocity", "waterfall", "bungeecord"].includes(server.core)) {
+      editingMotd = await getServerMotd(server.id);
+    } else {
+      editingMotd = "A Lodestone Minecraft Server";
+    }
   }
 
   function closeEditModal(): void {
     isEditModalOpen = false;
     editingServer = null;
+    editingMotd = "A Lodestone Minecraft Server";
   }
 
   async function saveServerProfile(payload: {
@@ -81,6 +89,7 @@
     port: number;
     ram_mb: number;
     jvm_args: string;
+    motd?: string;
   }): Promise<void> {
     const updated = await updateServerProfile(payload);
     if (!updated) {
@@ -399,7 +408,9 @@
             onOpenFolder={(id) => {
               void openServerFolder(id);
             }}
-            onEdit={() => requestEdit(server)}
+            onEdit={() => {
+              void requestEdit(server);
+            }}
             onOpenConsole={openConsole}
           />
         </div>
@@ -425,6 +436,7 @@
   <EditServerModal
     open={isEditModalOpen}
     server={editingServer}
+    motd={editingMotd}
     onClose={closeEditModal}
     onSave={saveServerProfile}
   />

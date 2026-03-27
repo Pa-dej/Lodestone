@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { serverState } from "$lib/stores/servers.svelte";
   import type { ServerConfig } from "$lib/types";
   import { t } from "$lib/stores/i18n.svelte";
 
@@ -8,30 +9,39 @@
     port: number;
     ram_mb: number;
     jvm_args: string;
+    motd?: string;
   }
 
   interface Props {
     open: boolean;
     server: ServerConfig | null;
+    motd: string;
     onClose: () => void;
     onSave: (payload: EditServerPayload) => Promise<void>;
   }
 
-  let { open, server, onClose, onSave }: Props = $props();
+  let { open, server, motd, onClose, onSave }: Props = $props();
 
   let name = $state("");
   let port = $state(25565);
   let ramMb = $state(2048);
   let jvmArgs = $state("");
+  let proxyMotd = $state("A Lodestone Minecraft Server");
   let saving = $state(false);
   let modalError = $state<string | null>(null);
   let lastServerId = $state<string | null>(null);
+  const minRamMb = $derived(Math.max(512, serverState.ramLimits.min_mb || 512));
+  const maxRamMb = $derived(Math.max(minRamMb, serverState.ramLimits.max_mb || 16384));
+  const isProxyCore = $derived(
+    server !== null && ["velocity", "waterfall", "bungeecord"].includes(server.core),
+  );
 
   function resetFromServer(target: ServerConfig): void {
     name = target.name;
     port = target.port;
-    ramMb = target.ram_mb;
+    ramMb = Math.min(maxRamMb, Math.max(minRamMb, target.ram_mb));
     jvmArgs = target.jvm_args ?? "";
+    proxyMotd = motd || "A Lodestone Minecraft Server";
     modalError = null;
   }
 
@@ -59,8 +69,8 @@
       return;
     }
 
-    if (!Number.isFinite(ramMb) || ramMb < 256) {
-      modalError = `${t("field_ram_mb")}: >= 256`;
+    if (!Number.isFinite(ramMb) || ramMb < minRamMb || ramMb > maxRamMb) {
+      modalError = `${t("field_ram_mb")}: ${minRamMb}-${maxRamMb}`;
       return;
     }
 
@@ -74,6 +84,7 @@
         port,
         ram_mb: Math.round(ramMb),
         jvm_args: jvmArgs.trim(),
+        motd: isProxyCore ? proxyMotd.trim() || "A Lodestone Minecraft Server" : undefined,
       });
     } catch (error) {
       modalError = error instanceof Error ? error.message : String(error);
@@ -91,6 +102,12 @@
     if (server && server.id !== lastServerId) {
       resetFromServer(server);
       lastServerId = server.id;
+    }
+  });
+
+  $effect(() => {
+    if (open && isProxyCore) {
+      proxyMotd = motd || "A Lodestone Minecraft Server";
     }
   });
 </script>
@@ -122,7 +139,7 @@
         <div class="field">
           <span class="field-label">{t("field_ram_mb")}</span>
           <div class="slider-row">
-            <input class="range-input" type="range" min={256} max={32768} step={256} bind:value={ramMb} />
+            <input class="range-input" type="range" min={minRamMb} max={maxRamMb} step={256} bind:value={ramMb} />
             <span class="tag">{ramMb} MB</span>
           </div>
         </div>
@@ -131,6 +148,13 @@
           <span class="field-label">{t("field_jvm_args")}</span>
           <input class="input" bind:value={jvmArgs} placeholder="-XX:+UseG1GC -XX:+ParallelRefProcEnabled" />
         </label>
+
+        {#if isProxyCore}
+          <label class="field">
+            <span class="field-label">{t("field_motd")}</span>
+            <input class="input" bind:value={proxyMotd} placeholder="A Lodestone Minecraft Server" />
+          </label>
+        {/if}
       </div>
 
       {#if modalError}

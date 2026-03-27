@@ -1,4 +1,4 @@
-const ANSI_PATTERN = /\u001b\[([0-9;]+)m/g;
+const ANSI_PATTERN = /\u001b\[([0-9;]*)m/g;
 
 const FG_COLORS: Record<number, string> = {
   30: "#000000", // Black
@@ -106,6 +106,10 @@ function buildStyleString(state: StyleState): string {
 }
 
 export function ansiToHtml(value: string): string {
+  // Remove unsupported CSI sequences (keep color/style sequences ending with 'm').
+  value = value.replace(/\u001b\[[0-9;]*[A-IK-Za-ik-z]/g, "");
+  value = value.replace(/\u0000/g, "");
+  
   let html = "";
   let cursor = 0;
   let currentState: StyleState = {};
@@ -113,7 +117,7 @@ export function ansiToHtml(value: string): string {
 
   for (const match of value.matchAll(ANSI_PATTERN)) {
     const start = match.index ?? 0;
-    html += escapeHtml(value.slice(cursor, start));
+    html += escapeHtml(value.slice(cursor, start).replaceAll("\u001b", ""));
     cursor = start + match[0].length;
 
     const codes = match[1]
@@ -122,6 +126,11 @@ export function ansiToHtml(value: string): string {
       .filter((entry) => Number.isFinite(entry));
 
     if (codes.length === 0) {
+      if (hasOpenSpan) {
+        html += "</span>";
+        hasOpenSpan = false;
+      }
+      currentState = {};
       continue;
     }
 
@@ -234,7 +243,7 @@ export function ansiToHtml(value: string): string {
     }
   }
 
-  html += escapeHtml(value.slice(cursor));
+  html += escapeHtml(value.slice(cursor).replaceAll("\u001b", ""));
   
   if (hasOpenSpan) {
     html += "</span>";

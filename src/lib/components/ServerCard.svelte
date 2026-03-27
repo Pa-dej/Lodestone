@@ -180,6 +180,16 @@
     user-select: none;
   }
 
+  .server-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--core-color) 22%, transparent);
+    opacity: 0.055;
+    pointer-events: none;
+    z-index: 0;
+  }
+
   .server-card > :not(.server-bg-icon) {
     position: relative;
     z-index: 1;
@@ -196,42 +206,22 @@
     width: 230px;
     height: 230px;
     color: var(--core-color);
-    opacity: 0.08;
+    opacity: 0.13;
+    filter: saturate(0.72) brightness(1.28);
     transform: rotate(-14deg);
     pointer-events: none;
     z-index: 0;
+  }
+
+  :global([data-theme="light"]) .server-bg-icon {
+    opacity: 0.12;
+    filter: saturate(0.78) brightness(0.85);
   }
 
   .server-bg-icon :global(svg) {
     width: 100%;
     height: 100%;
     display: block;
-  }
-
-  .server-bg-icon :global(path),
-  .server-bg-icon :global(circle),
-  .server-bg-icon :global(rect),
-  .server-bg-icon :global(polygon),
-  .server-bg-icon :global(polyline),
-  .server-bg-icon :global(ellipse),
-  .server-bg-icon :global(line) {
-    stroke: currentColor !important;
-    fill: none !important;
-  }
-
-  .server-bg-icon :global(path[fill]:not([fill="none"])),
-  .server-bg-icon :global(circle[fill]:not([fill="none"])),
-  .server-bg-icon :global(rect[fill]:not([fill="none"])),
-  .server-bg-icon :global(polygon[fill]:not([fill="none"])),
-  .server-bg-icon :global(polyline[fill]:not([fill="none"])),
-  .server-bg-icon :global(ellipse[fill]:not([fill="none"])) {
-    fill: currentColor !important;
-    stroke: none !important;
-  }
-
-  .server-bg-icon :global(svg > path[d="M0 0h24v24H0z"]) {
-    stroke: none !important;
-    fill: none !important;
   }
 
   .server-head {
@@ -244,7 +234,14 @@
   .server-head-right {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 5px;
+    min-width: 0;
+  }
+
+  .server-head-right :global(.badge) {
+    font-size: 10px;
+    padding: 3px 7px;
+    white-space: nowrap;
   }
 
   .btn-folder {

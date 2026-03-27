@@ -52,7 +52,7 @@
 
 <style>
   .sidebar {
-    width: 220px;
+    width: 100%;
     height: 100vh;
     border-radius: 0;
     border-right: 0.5px solid var(--border);
@@ -133,7 +133,6 @@
 
   @media (max-width: 920px) {
     .sidebar {
-      width: 76px;
       padding-inline: 8px;
     }
 
