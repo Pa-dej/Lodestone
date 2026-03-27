@@ -208,7 +208,12 @@
     color: var(--core-color);
     opacity: 0.13;
     filter: saturate(0.72) brightness(1.28);
-    transform: rotate(-14deg);
+    transform: rotate(-14deg) translate3d(0, 0, 0) scale(1);
+    transform-origin: 72% 68%;
+    transition:
+      transform 0.42s cubic-bezier(0.16, 1, 0.3, 1),
+      opacity 0.3s ease-out,
+      filter 0.3s ease-out;
     pointer-events: none;
     z-index: 0;
   }
@@ -216,6 +221,22 @@
   :global([data-theme="light"]) .server-bg-icon {
     opacity: 0.12;
     filter: saturate(0.78) brightness(0.85);
+  }
+
+  .server-card:hover .server-bg-icon {
+    opacity: 0.16;
+    filter: saturate(0.8) brightness(1.34);
+    transform: rotate(-10deg) translate3d(-10px, -8px, 0) scale(1.04);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .server-bg-icon {
+      transition: none;
+    }
+
+    .server-card:hover .server-bg-icon {
+      transform: rotate(-12deg) translate3d(-4px, -3px, 0) scale(1.01);
+    }
   }
 
   .server-bg-icon :global(svg) {
