@@ -10,15 +10,19 @@
   import QuiltIcon from "../../icons/servers/Quilt.svg?raw";
   import ForgeIcon from "../../icons/servers/Forge.svg?raw";
   import FoliaIcon from "../../icons/servers/Folia.svg?raw";
+  import VelocityIcon from "../../icons/servers/Velocity.svg?raw";
   import WaterfallIcon from "../../icons/servers/Waterfall.svg?raw";
+  import BungeeCordIcon from "../../icons/servers/BungeeCord.svg?raw";
   import VanillaIcon from "../../icons/Server.svg?raw";
 
   interface CoreOption {
     id: CoreType;
+    group: "server" | "proxy";
     iconSvg: string;
     color: string;
     name: string;
     description: string;
+    deprecated?: boolean;
   }
 
   interface Props {
@@ -32,6 +36,7 @@
   const coreOptions = $derived<CoreOption[]>([
     {
       id: "paper",
+      group: "server",
       iconSvg: PaperIcon,
       color: "var(--core-paper)",
       name: "Paper",
@@ -42,6 +47,7 @@
     },
     {
       id: "purpur",
+      group: "server",
       iconSvg: PurpurIcon,
       color: "var(--core-purpur)",
       name: "Purpur",
@@ -50,6 +56,7 @@
     },
     {
       id: "fabric",
+      group: "server",
       iconSvg: FabricIcon,
       color: "var(--core-fabric)",
       name: "Fabric",
@@ -57,6 +64,7 @@
     },
     {
       id: "quilt",
+      group: "server",
       iconSvg: QuiltIcon,
       color: "var(--core-quilt)",
       name: "Quilt",
@@ -65,6 +73,7 @@
     },
     {
       id: "forge",
+      group: "server",
       iconSvg: ForgeIcon,
       color: "var(--core-forge)",
       name: "Forge",
@@ -72,23 +81,42 @@
     },
     {
       id: "folia",
+      group: "server",
       iconSvg: FoliaIcon,
       color: "var(--core-folia)",
       name: "Folia",
       description: i18nState.language === "ru" ? "Многопоточный форк Paper" : "Multithreaded Paper fork",
     },
     {
+      id: "velocity",
+      group: "proxy",
+      iconSvg: VelocityIcon,
+      color: "var(--core-velocity)",
+      name: "Velocity",
+      description: i18nState.language === "ru" ? "Современный быстрый прокси" : "Modern fast proxy",
+    },
+    {
       id: "waterfall",
+      group: "proxy",
       iconSvg: WaterfallIcon,
       color: "var(--core-waterfall)",
       name: "Waterfall",
       description:
         i18nState.language === "ru"
-          ? "Bungee-прокси (deprecated)"
-          : "Bungee proxy (deprecated)",
+          ? "Bungee-прокси"
+          : "Bungee proxy",
+    },
+    {
+      id: "bungeecord",
+      group: "proxy",
+      iconSvg: BungeeCordIcon,
+      color: "var(--core-bungeecord)",
+      name: "BungeeCord",
+      description: i18nState.language === "ru" ? "Классический прокси" : "Classic proxy",
     },
     {
       id: "vanilla",
+      group: "server",
       iconSvg: VanillaIcon,
       color: "var(--core-vanilla)",
       name: "Vanilla",
@@ -119,6 +147,10 @@
   let previousOpen = false;
   let versionsRequestId = 0;
   const VERSION_FETCH_TIMEOUT_MS = 45000;
+  const BUNGEE_LATEST_VERSION = "latest";
+
+  const serverCoreOptions = $derived(coreOptions.filter((option) => option.group === "server"));
+  const proxyCoreOptions = $derived(coreOptions.filter((option) => option.group === "proxy"));
 
   const releaseVersionPattern = /^(?:\d+\.\d+(?:\.\d+){0,2}|\d{2}\.\d{2}(?:\.\d+)?)$/;
 
@@ -187,6 +219,14 @@
   });
 
   const showWaterfallWarning = $derived(selectedCore === "waterfall");
+  const isBungeeCord = $derived(selectedCore === "bungeecord");
+  const createButtonLabel = $derived.by(() =>
+    isBungeeCord
+      ? i18nState.language === "ru"
+        ? "Скачать последний"
+        : "Download latest"
+      : t("modal_create"),
+  );
 
   async function fetchVersionsWithTimeout(core: CoreType): Promise<string[]> {
     const request = fetchVersions(core).catch(() => []);
@@ -198,6 +238,14 @@
 
   async function loadVersionsForCore(core: CoreType): Promise<void> {
     const requestId = ++versionsRequestId;
+    if (core === "bungeecord") {
+      loadingVersions = false;
+      modalError = null;
+      versions = [BUNGEE_LATEST_VERSION];
+      selectedVersion = BUNGEE_LATEST_VERSION;
+      return;
+    }
+
     loadingVersions = true;
     modalError = null;
     versions = [];
@@ -319,7 +367,7 @@
   });
 
   $effect(() => {
-    if (!open || currentStep !== 1 || loadingVersions) {
+    if (!open || currentStep !== 1 || loadingVersions || isBungeeCord) {
       return;
     }
 
@@ -355,21 +403,47 @@
 
       {#if currentStep === 0}
         <div class="core-grid">
-          {#each coreOptions as option}
-            <button
-              type="button"
-              class="core-option"
-              class:selected={option.id === selectedCore}
-              onclick={() => (selectedCore = option.id)}
-            >
-              <span class="core-icon" style={`color:${option.color}`}>{@html option.iconSvg}</span>
-              <span class="core-content">
-                <span class="core-name">{option.name}</span>
-                <span class="core-description">{option.description}</span>
-              </span>
-              <span class="core-check">{option.id === selectedCore ? "✓" : ""}</span>
-            </button>
-          {/each}
+          <div class="core-column">
+            <span class="core-column-label">{i18nState.language === "ru" ? "Сервер" : "Server"}</span>
+            {#each serverCoreOptions as option}
+              <button
+                type="button"
+                class="core-option"
+                class:selected={option.id === selectedCore}
+                onclick={() => (selectedCore = option.id)}
+              >
+                <span class="core-icon" style={`color:${option.color}`}>{@html option.iconSvg}</span>
+                <span class="core-content">
+                  <span class="core-name">{option.name}</span>
+                  <span class="core-description">{option.description}</span>
+                </span>
+                <span class="core-check">{option.id === selectedCore ? "✓" : ""}</span>
+              </button>
+            {/each}
+          </div>
+
+          <div class="core-column">
+            <span class="core-column-label">{i18nState.language === "ru" ? "Прокси" : "Proxy"}</span>
+            {#each proxyCoreOptions as option}
+              <button
+                type="button"
+                class="core-option"
+                class:selected={option.id === selectedCore}
+                onclick={() => (selectedCore = option.id)}
+              >
+                <span class="core-icon" style={`color:${option.color}`}>{@html option.iconSvg}</span>
+                <span class="core-content">
+                  <span class="core-name">{option.name}</span>
+                  <span class="core-description">{option.description}</span>
+                </span>
+                {#if option.deprecated}
+                  <span class="core-badge">EOL</span>
+                {:else}
+                  <span class="core-check">{option.id === selectedCore ? "✓" : ""}</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
         </div>
 
         <footer class="modal-footer">
@@ -384,23 +458,34 @@
             <input class="input" bind:value={serverName} placeholder="my-server" />
           </label>
 
-          <div class="field">
-            <div class="field-label-row">
+          {#if isBungeeCord}
+            <div class="field">
               <span class="field-label">{t("field_version")}</span>
-              <label class="release-only">
-                <input type="checkbox" bind:checked={releaseOnly} />
-                <span>{t("field_release_only")}</span>
-              </label>
+              <div class="input static-version">
+                {i18nState.language === "ru"
+                  ? "Последний успешный билд (auto)"
+                  : "Latest successful build (auto)"}
+              </div>
             </div>
-            <CustomSelect
-              value={selectedVersion}
-              options={versionOptions}
-              disabled={loadingVersions || visibleVersions.length === 0}
-              onChange={(value) => {
-                selectedVersion = value;
-              }}
-            />
-          </div>
+          {:else}
+            <div class="field">
+              <div class="field-label-row">
+                <span class="field-label">{t("field_version")}</span>
+                <label class="release-only">
+                  <input type="checkbox" bind:checked={releaseOnly} />
+                  <span>{t("field_release_only")}</span>
+                </label>
+              </div>
+              <CustomSelect
+                value={selectedVersion}
+                options={versionOptions}
+                disabled={loadingVersions || visibleVersions.length === 0}
+                onChange={(value) => {
+                  selectedVersion = value;
+                }}
+              />
+            </div>
+          {/if}
 
           {#if showWaterfallWarning}
             <div class="alert alert-warning span-2">
@@ -494,7 +579,7 @@
         <footer class="modal-footer">
           <button type="button" class="btn btn-ghost" onclick={moveBack}>{t("modal_back")}</button>
           <button type="button" class="btn btn-primary" onclick={submitCreation}>
-            {t("modal_create")}
+            {createButtonLabel}
           </button>
         </footer>
       {/if}
@@ -617,7 +702,22 @@
 
   .core-grid {
     display: grid;
-    gap: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .core-column {
+    display: grid;
+    gap: 8px;
+    align-content: start;
+  }
+
+  .core-column-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0 2px;
   }
 
   .core-option {
@@ -680,6 +780,15 @@
     text-align: right;
   }
 
+  .core-badge {
+    font-size: 10px;
+    color: #c46060;
+    border: 0.5px solid rgba(196, 96, 96, 0.4);
+    background: rgba(196, 96, 96, 0.12);
+    border-radius: 999px;
+    padding: 1px 7px;
+  }
+
   .form-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -710,6 +819,11 @@
 
   .release-only input {
     accent-color: var(--accent);
+  }
+
+  .static-version {
+    color: var(--text-muted);
+    cursor: default;
   }
 
   .span-2 {
@@ -828,6 +942,10 @@
   }
 
   @media (max-width: 680px) {
+    .core-grid {
+      grid-template-columns: 1fr;
+    }
+
     .form-grid {
       grid-template-columns: 1fr;
     }

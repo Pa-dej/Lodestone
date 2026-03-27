@@ -5,7 +5,9 @@ export type CoreType =
   | "quilt"
   | "forge"
   | "folia"
+  | "velocity"
   | "waterfall"
+  | "bungeecord"
   | "vanilla";
 
 export interface ServerConfig {

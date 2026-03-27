@@ -892,6 +892,80 @@ async fn download_to_path(
     Ok(())
 }
 
+async fn download_to_path_with_headers(
+    client: &Client,
+    url: &str,
+    destination: &Path,
+    app_handle: &AppHandle,
+    server_id: &str,
+    referer: Option<&str>,
+) -> Result<(), String> {
+    let mut request = client.get(url);
+    
+    if let Some(ref_url) = referer {
+        request = request.header("Referer", ref_url);
+    }
+    
+    let response = request
+        .send()
+        .await
+        .map_err(|err| format!("Failed to start download from {url}: {err}"))?
+        .error_for_status()
+        .map_err(|err| format!("Download request failed for {url}: {err}"))?;
+
+    let total_bytes = response.content_length().unwrap_or(0);
+    let file_name = destination
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("server.jar");
+
+    let mut stream = response.bytes_stream();
+    let file = tokio_fs::File::create(destination)
+        .await
+        .map_err(|err| format!("Failed to create file {}: {err}", destination.display()))?;
+
+    let std_file = file.into_std().await;
+    let mut buffered_file = BufWriter::with_capacity(64 * 1024, std_file);
+
+    let mut downloaded_bytes: u64 = 0;
+    let started_at = Instant::now();
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|err| format!("Download stream failure: {err}"))?;
+        buffered_file
+            .write_all(&chunk)
+            .map_err(|err| format!("Failed writing {}: {err}", destination.display()))?;
+        downloaded_bytes += chunk.len() as u64;
+
+        let elapsed_secs = started_at.elapsed().as_secs_f64().max(0.001);
+        let speed_mbps = downloaded_bytes as f64 / (1024.0 * 1024.0) / elapsed_secs;
+        let percent = if total_bytes > 0 {
+            ((downloaded_bytes as f64 / total_bytes as f64) * 100.0).min(100.0)
+        } else {
+            0.0
+        };
+
+        emit_download_progress(
+            app_handle,
+            DownloadProgressPayload {
+                server_id: server_id.to_string(),
+                filename: file_name.to_string(),
+                downloaded_bytes,
+                total_bytes,
+                percent,
+                speed_mbps,
+                done: false,
+            },
+        );
+    }
+
+    buffered_file
+        .flush()
+        .map_err(|err| format!("Failed to flush {}: {err}", destination.display()))?;
+
+    Ok(())
+}
+
 async fn fetch_json(client: &Client, url: &str) -> Result<Value, String> {
     client
         .get(url)
@@ -1320,6 +1394,10 @@ fn resolve_launch_jar_name(server_dir: &Path, core: &str) -> String {
     String::from("server.jar")
 }
 
+fn core_uses_nogui(core: &str) -> bool {
+    !matches!(core, "velocity" | "waterfall" | "bungeecord")
+}
+
 async fn write_start_scripts(
     server_dir: &Path,
     settings: &AppSettings,
@@ -1349,10 +1427,12 @@ async fn write_start_scripts(
     };
     let launch_jar = resolve_launch_jar_name(server_dir, core);
 
+    let nogui_segment = if core_uses_nogui(core) { " nogui" } else { "" };
+
     #[cfg(target_os = "windows")]
     {
         let bat_body = format!(
-            "@echo off\r\n\"{java}\" -Xms{ram_mb}M -Xmx{ram_mb}M {extra_segment}-jar {launch_jar} nogui\r\npause\r\n"
+            "@echo off\r\n\"{java}\" -Xms{ram_mb}M -Xmx{ram_mb}M {extra_segment}-jar {launch_jar}{nogui_segment}\r\npause\r\n"
         );
         let bat_path = server_dir.join("start.bat");
         tokio_fs::write(&bat_path, bat_body)
@@ -1363,7 +1443,7 @@ async fn write_start_scripts(
     #[cfg(not(target_os = "windows"))]
     {
         let sh_body = format!(
-            "#!/usr/bin/env sh\n\"{java}\" -Xms{ram_mb}M -Xmx{ram_mb}M {extra_segment}-jar {launch_jar} nogui\n"
+            "#!/usr/bin/env sh\n\"{java}\" -Xms{ram_mb}M -Xmx{ram_mb}M {extra_segment}-jar {launch_jar}{nogui_segment}\n"
         );
         let sh_path = server_dir.join("start.sh");
         tokio_fs::write(&sh_path, sh_body)
@@ -1469,6 +1549,26 @@ async fn install_core_jar(
                 "https://api.papermc.io/v2/projects/waterfall/versions/{version}/builds/{build}/downloads/waterfall-{version}-{build}.jar"
             );
             download_to_path(client, &url, &server_jar_path, app_handle, server_id).await?;
+        }
+        "velocity" => {
+            let build = latest_paper_like_build(client, "velocity", version).await?;
+            let url = format!(
+                "https://api.papermc.io/v2/projects/velocity/versions/{version}/builds/{build}/downloads/velocity-{version}-{build}.jar"
+            );
+            download_to_path(client, &url, &server_jar_path, app_handle, server_id).await?;
+        }
+        "bungeecord" => {
+            let url = String::from(
+                "https://hub.spigotmc.org/jenkins/job/BungeeCord/lastSuccessfulBuild/artifact/bootstrap/target/BungeeCord.jar",
+            );
+            download_to_path_with_headers(
+                client, 
+                &url, 
+                &server_jar_path, 
+                app_handle, 
+                server_id,
+                Some("https://hub.spigotmc.org/jenkins/job/BungeeCord/")
+            ).await?;
         }
         "vanilla" => {
             let url = vanilla_server_jar_url(client, version).await?;
@@ -2059,7 +2159,9 @@ async fn create_server(
         "quilt",
         "forge",
         "folia",
+        "velocity",
         "waterfall",
+        "bungeecord",
         "vanilla",
     ];
     if !supported.contains(&core.as_str()) {
@@ -2101,6 +2203,7 @@ async fn create_server(
 
     let settings = load_settings_from_disk().await.unwrap_or_default();
     let client = Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .timeout(Duration::from_secs(120))
         .build()
         .map_err(|err| format!("Failed to initialize HTTP client: {err}"))?;
@@ -2217,7 +2320,10 @@ async fn start_server(
     }
 
     let launch_jar = resolve_launch_jar_name(&server.path, &server.core);
-    command.arg("-jar").arg(launch_jar).arg("nogui");
+    command.arg("-jar").arg(launch_jar);
+    if core_uses_nogui(&server.core) {
+        command.arg("nogui");
+    }
 
     #[cfg(unix)]
     let (pty_master, slave_fd) =
@@ -2857,6 +2963,7 @@ async fn get_server_stats(
 #[tauri::command]
 async fn fetch_versions(core: String) -> Result<Vec<String>, String> {
     let client = Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|err| format!("Failed to initialize HTTP client: {err}"))?;
@@ -2867,7 +2974,7 @@ async fn fetch_versions(core: String) -> Result<Vec<String>, String> {
     }
 
     let mut versions = match core.as_str() {
-        "paper" | "folia" | "waterfall" => {
+        "paper" | "folia" | "waterfall" | "velocity" => {
             let url = format!("https://api.papermc.io/v2/projects/{core}");
             let json = fetch_json(&client, &url).await?;
             json.get("versions")
@@ -2964,6 +3071,7 @@ async fn fetch_versions(core: String) -> Result<Vec<String>, String> {
                 .map(str::to_string)
                 .collect::<Vec<_>>()
         }
+        "bungeecord" => vec![String::from("latest")],
         _ => return Err(format!("Unsupported core: {core}")),
     };
 

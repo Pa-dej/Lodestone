@@ -57,11 +57,13 @@
 
   --core-paper: #d48f98;
   --core-folia: #5a9e6a;
+  --core-velocity: #5abf9a;
   --core-forge: #7e8fd4;
   --core-fabric: #e59557;
   --core-quilt: #4ca89a;
   --core-purpur: #9a7ec4;
   --core-waterfall: #62a5d8;
+  --core-bungeecord: #ffcf99;
   --core-vanilla: #6a9ec4;
 }
 
@@ -86,6 +88,7 @@
   --scrollbar-thumb: #c8c1b7;
   --scrollbar-thumb-hover: #b5ad9f;
   --scrollbar-thumb-active: #a1988a;
+  --core-bungeecord: #d4a060;
 }
 
 [data-accent="amber"] {

@@ -13,7 +13,9 @@
   import QuiltIcon from "../../icons/servers/Quilt.svg?raw";
   import ForgeIcon from "../../icons/servers/Forge.svg?raw";
   import FoliaIcon from "../../icons/servers/Folia.svg?raw";
+  import VelocityIcon from "../../icons/servers/Velocity.svg?raw";
   import WaterfallIcon from "../../icons/servers/Waterfall.svg?raw";
+  import BungeeCordIcon from "../../icons/servers/BungeeCord.svg?raw";
   import VanillaIcon from "../../icons/Server.svg?raw";
   import { t } from "$lib/stores/i18n.svelte";
 
@@ -46,7 +48,9 @@
     quilt: { iconSvg: QuiltIcon, color: "var(--core-quilt)" },
     forge: { iconSvg: ForgeIcon, color: "var(--core-forge)" },
     folia: { iconSvg: FoliaIcon, color: "var(--core-folia)" },
+    velocity: { iconSvg: VelocityIcon, color: "var(--core-velocity)" },
     waterfall: { iconSvg: WaterfallIcon, color: "var(--core-waterfall)" },
+    bungeecord: { iconSvg: BungeeCordIcon, color: "var(--core-bungeecord)" },
     vanilla: { iconSvg: VanillaIcon, color: "var(--core-vanilla)" },
   };
 
