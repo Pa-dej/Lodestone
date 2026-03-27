@@ -107,7 +107,7 @@ function buildStyleString(state: StyleState): string {
 
 export function ansiToHtml(value: string): string {
   // Remove unsupported CSI sequences (keep color/style sequences ending with 'm').
-  value = value.replace(/\u001b\[[0-9;]*[A-IK-Za-ik-z]/g, "");
+  value = value.replace(/\u001b\[(?![0-9;]*m)[0-9;?]*[ -/]*[@-~]/g, "");
   value = value.replace(/\u0000/g, "");
   
   let html = "";

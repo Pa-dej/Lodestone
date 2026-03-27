@@ -41,24 +41,52 @@ const MAX_CONSOLE_LINES: usize = 50;
 const CONSOLE_CHANNEL_SIZE: usize = 64;
 const BATCH_SIZE: usize = 8;
 const BATCH_INTERVAL_MS: u64 = 8;
-const BASE_SERVER_COMMANDS: &[&str] = &[
+const BASE_MINECRAFT_COMMANDS: &[&str] = &[
     "help",
     "list",
-    "plugins",
-    "pl",
-    "plugin list",
-    "plugin add",
-    "plugin install",
-    "plugin remove",
-    "plugin delete",
-    "plugin update",
     "stop",
-    "save-all",
-    "reload",
     "restart",
-];
-const EXTENDED_SERVER_COMMANDS: &[&str] = &[
+    "reload",
+    "save-all",
     "say",
+    "kick",
+    "ban",
+    "ban-ip",
+    "pardon",
+    "pardon-ip",
+    "op",
+    "deop",
+    "whitelist",
+    "gamemode",
+    "difficulty",
+    "time",
+    "weather",
+    "tp",
+    "teleport",
+    "give",
+    "clear",
+    "effect",
+    "xp",
+    "seed",
+];
+
+const BASE_PROXY_COMMANDS: &[&str] = &[
+    "help",
+    "list",
+    "glist",
+    "server",
+    "send",
+    "alert",
+    "find",
+    "ip",
+    "kick",
+    "reload",
+    "greload",
+    "end",
+    "stop",
+];
+
+const EXTENDED_MINECRAFT_COMMANDS: &[&str] = &[
     "save-on",
     "save-off",
     "time set day",
@@ -80,30 +108,14 @@ const EXTENDED_SERVER_COMMANDS: &[&str] = &[
     "gamemode creative",
     "gamemode adventure",
     "gamemode spectator",
-    "tp",
-    "teleport",
     "whitelist on",
     "whitelist off",
     "whitelist add",
     "whitelist remove",
     "whitelist list",
     "whitelist reload",
-    "ban",
-    "ban-ip",
-    "pardon",
-    "pardon-ip",
-    "kick",
-    "op",
-    "deop",
     "reload confirm",
-    "seed",
-    "give",
-    "clear",
-    "kill",
-    "effect",
-    "enchant",
     "experience",
-    "xp",
     "fill",
     "setblock",
     "summon",
@@ -114,13 +126,6 @@ const EXTENDED_SERVER_COMMANDS: &[&str] = &[
     "worldborder",
     "spawnpoint",
     "setworldspawn",
-    "plugman list",
-    "plugman load",
-    "plugman unload",
-    "plugman reload",
-    "plugman enable",
-    "plugman disable",
-    "plugman check",
 ];
 
 type VersionsCache = HashMap<String, (Instant, Vec<String>)>;
@@ -1557,6 +1562,19 @@ fn escape_yaml_double_quoted(value: &str) -> String {
         .replace('\r', " ")
 }
 
+fn default_rcon_port(server_port: u16) -> u16 {
+    let with_offset = server_port as u32 + 10_000;
+    if with_offset <= u16::MAX as u32 {
+        return with_offset as u16;
+    }
+
+    if server_port > 1_000 {
+        return server_port - 1_000;
+    }
+
+    25_575
+}
+
 async fn write_proxy_bootstrap_files(
     server_dir: &Path,
     core: &str,
@@ -1909,6 +1927,7 @@ async fn write_start_scripts(
 }
 
 async fn write_bootstrap_files(
+    server_id: &str,
     server_dir: &Path,
     settings: &AppSettings,
     ram_mb: u32,
@@ -1939,6 +1958,9 @@ async fn write_bootstrap_files(
             "normal",
         );
         let view_distance = properties.view_distance.clamp(3, 32);
+        let rcon_port = default_rcon_port(port);
+        let rcon_suffix_len = server_id.len().min(12);
+        let rcon_password = format!("lodestone-{}", &server_id[..rcon_suffix_len]);
 
         let props_body = format!(
             "server-port={port}\n\
@@ -1947,8 +1969,12 @@ async fn write_bootstrap_files(
              difficulty={difficulty}\n\
              online-mode={}\n\
              pvp={}\n\
-             view-distance={view_distance}\n",
-            properties.online_mode, properties.pvp
+             view-distance={view_distance}\n\
+             enable-rcon=true\n\
+             rcon.port={rcon_port}\n\
+             rcon.password={rcon_password}\n\
+             broadcast-rcon-to-ops=false\n",
+            properties.online_mode, properties.pvp,
         );
         tokio_fs::write(&props_path, props_body)
             .await
@@ -2710,6 +2736,7 @@ async fn create_server(
     .await?;
 
     write_bootstrap_files(
+        &id,
         &server_dir,
         &settings,
         normalized_ram,
@@ -3511,21 +3538,206 @@ fn collect_plugin_commands(server_path: &Path) -> Vec<String> {
     collected
 }
 
-fn build_server_commands(include_extended: bool, plugin_commands: Vec<String>) -> Vec<String> {
-    let mut commands = BASE_SERVER_COMMANDS
+fn base_commands_for_core(core: &str) -> &'static [&'static str] {
+    if is_proxy_core(core) {
+        BASE_PROXY_COMMANDS
+    } else {
+        BASE_MINECRAFT_COMMANDS
+    }
+}
+
+fn parse_bool_property(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+#[derive(Debug, Clone)]
+struct RconConfig {
+    port: u16,
+    password: String,
+}
+
+fn parse_rcon_config(content: &str) -> Option<RconConfig> {
+    let entries = parse_server_properties(content);
+
+    let mut enabled = false;
+    let mut password = String::new();
+    let mut port = 25_575u16;
+
+    for entry in entries {
+        let key = entry.key.trim().to_ascii_lowercase();
+        let value = entry.value.trim();
+        match key.as_str() {
+            "enable-rcon" => {
+                enabled = parse_bool_property(value);
+            }
+            "rcon.password" => {
+                password = value.to_string();
+            }
+            "rcon.port" => {
+                if let Ok(parsed) = value.parse::<u16>() {
+                    if parsed > 0 {
+                        port = parsed;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if enabled && !password.is_empty() {
+        Some(RconConfig { port, password })
+    } else {
+        None
+    }
+}
+
+async fn load_rcon_config(server_path: &Path) -> Option<RconConfig> {
+    let path = server_path.join("server.properties");
+    let content = tokio_fs::read_to_string(path).await.ok()?;
+    parse_rcon_config(&content)
+}
+
+fn is_help_command_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | ':' | '.')
+}
+
+fn extract_commands_from_help_response(help: &str) -> Vec<String> {
+    let bytes = strip_ansi_escapes::strip(help.as_bytes());
+    let sanitized = String::from_utf8_lossy(&bytes).into_owned();
+
+    let mut commands = HashSet::<String>::new();
+
+    for line in sanitized.lines() {
+        for (index, ch) in line.char_indices() {
+            if ch != '/' {
+                continue;
+            }
+
+            if index > 0 {
+                let prev = line[..index].chars().next_back();
+                if prev.is_some_and(|item| item.is_ascii_alphanumeric() || matches!(item, ':' | '/'))
+                {
+                    continue;
+                }
+            }
+
+            let start = index + 1;
+            let mut end = start;
+            for (offset, next_char) in line[start..].char_indices() {
+                if is_help_command_char(next_char) {
+                    end = start + offset + next_char.len_utf8();
+                } else {
+                    break;
+                }
+            }
+
+            if end <= start {
+                continue;
+            }
+
+            let command = line[start..end]
+                .trim_matches(':')
+                .trim()
+                .to_ascii_lowercase();
+            if command.is_empty() || command.chars().all(|item| item.is_ascii_digit()) {
+                continue;
+            }
+
+            commands.insert(command);
+        }
+    }
+
+    let mut list = commands.into_iter().collect::<Vec<_>>();
+    list.sort();
+    list
+}
+
+fn core_supports_rcon_help(core: &str) -> bool {
+    !is_proxy_core(core)
+}
+
+async fn fetch_runtime_rcon_commands(server: &ServerConfig) -> Vec<String> {
+    if !core_supports_rcon_help(&server.core) {
+        return Vec::new();
+    }
+
+    let Some(rcon_config) = load_rcon_config(&server.path).await else {
+        return Vec::new();
+    };
+
+    let address = format!("127.0.0.1:{}", rcon_config.port);
+    let connect_result = tokio::time::timeout(
+        Duration::from_millis(800),
+        rcon::Connection::connect(address.as_str(), rcon_config.password.as_str()),
+    )
+    .await;
+
+    let mut connection = match connect_result {
+        Ok(Ok(connection)) => connection,
+        _ => return Vec::new(),
+    };
+
+    let mut commands = HashSet::<String>::new();
+    for page in 1..=6 {
+        let command = if page == 1 {
+            String::from("help")
+        } else {
+            format!("help {page}")
+        };
+
+        let response_result =
+            tokio::time::timeout(Duration::from_millis(700), connection.cmd(&command)).await;
+        let response = match response_result {
+            Ok(Ok(response)) => response,
+            _ => break,
+        };
+
+        let page_commands = extract_commands_from_help_response(&response);
+        if page_commands.is_empty() {
+            break;
+        }
+
+        let mut added = 0usize;
+        for item in page_commands {
+            if commands.insert(item) {
+                added = added.saturating_add(1);
+            }
+        }
+
+        if added == 0 {
+            break;
+        }
+    }
+
+    let mut collected = commands.into_iter().collect::<Vec<_>>();
+    collected.sort();
+    collected
+}
+
+fn build_server_commands(
+    core: &str,
+    include_extended: bool,
+    plugin_commands: Vec<String>,
+    runtime_commands: Vec<String>,
+) -> Vec<String> {
+    let mut commands = base_commands_for_core(core)
         .iter()
         .map(|command| (*command).to_string())
         .collect::<Vec<_>>();
 
-    if include_extended {
+    if include_extended && !is_proxy_core(core) {
         commands.extend(
-            EXTENDED_SERVER_COMMANDS
+            EXTENDED_MINECRAFT_COMMANDS
                 .iter()
                 .map(|command| (*command).to_string()),
         );
     }
 
     commands.extend(plugin_commands);
+    commands.extend(runtime_commands);
 
     let mut seen = HashSet::<String>::new();
     commands.retain(|command| seen.insert(command.clone()));
@@ -3542,6 +3754,7 @@ async fn get_server_commands(
         let running_map = state.running.lock().await;
         running_map.get(&id).cloned()
     };
+    let is_running = running.is_some();
 
     let server = load_servers_cached(&state)
         .await?
@@ -3549,13 +3762,30 @@ async fn get_server_commands(
         .find(|item| item.id == id)
         .ok_or_else(|| String::from("Server not found"))?;
 
-    let server_path = server.path.clone();
-    let plugin_commands =
+    let plugin_commands = if matches!(
+        server.core.as_str(),
+        "paper" | "purpur" | "folia" | "velocity" | "waterfall" | "bungeecord"
+    ) {
+        let server_path = server.path.clone();
         tokio::task::spawn_blocking(move || collect_plugin_commands(&server_path))
             .await
-            .unwrap_or_default();
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
-    Ok(build_server_commands(running.is_some(), plugin_commands))
+    let runtime_commands = if is_running {
+        fetch_runtime_rcon_commands(&server).await
+    } else {
+        Vec::new()
+    };
+
+    Ok(build_server_commands(
+        &server.core,
+        is_running,
+        plugin_commands,
+        runtime_commands,
+    ))
 }
 
 #[tauri::command]

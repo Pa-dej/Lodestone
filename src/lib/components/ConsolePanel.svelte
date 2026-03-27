@@ -125,14 +125,48 @@
     return `${leadingSpaces}${hasLeadingSlash ? "/" : ""}${completion}`;
   }
 
+  function splitCommandTokens(value: string): string[] {
+    return value
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((token) => token.length > 0);
+  }
+
+  function matchesByTokenPrefix(input: string, candidate: string): boolean {
+    const inputTokens = splitCommandTokens(input);
+    if (inputTokens.length === 0) {
+      return true;
+    }
+
+    const candidateTokens = splitCommandTokens(candidate);
+    if (candidateTokens.length < inputTokens.length) {
+      return false;
+    }
+
+    for (let index = 0; index < inputTokens.length; index += 1) {
+      if (!candidateTokens[index].startsWith(inputTokens[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   function getMatchingCommands(input: string): string[] {
     const normalized = normalizeInputForMatch(input).toLowerCase();
     if (!normalized) {
       return commandSuggestions;
     }
 
-    return commandSuggestions.filter((cmd) =>
+    const directMatches = commandSuggestions.filter((cmd) =>
       cmd.toLowerCase().startsWith(normalized)
+    );
+    if (directMatches.length > 0) {
+      return directMatches;
+    }
+
+    return commandSuggestions.filter((cmd) =>
+      matchesByTokenPrefix(normalized, cmd)
     );
   }
 
