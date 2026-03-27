@@ -120,10 +120,8 @@
   let propertiesError = $state<string | null>(null);
   let propertiesSuccessMessage = $state<string | null>(null);
   let loadedForServer = $state<string | null>(null);
-
-  async function onSaveSettings(): Promise<void> {
-    await saveSettings();
-  }
+  let persistedPropertiesSignature = $state("");
+  let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 
   function updateAndPersistSettings(patch: Partial<AppSettings>): void {
     updateSettings(patch);
@@ -195,6 +193,10 @@
       .sort((a, b) => a.key.localeCompare(b.key));
   }
 
+  function propertiesSignature(entries: ServerPropertyEntry[]): string {
+    return JSON.stringify(normalizeProperties(entries));
+  }
+
   async function reloadSelectedServerProperties(): Promise<void> {
     if (!selectedServerId) {
       properties = [];
@@ -208,22 +210,39 @@
     const loaded = await getServerProperties(selectedServerId);
     properties = loaded.length > 0 ? normalizeProperties(loaded) : [...defaultServerProperties];
     loadedForServer = selectedServerId;
+    persistedPropertiesSignature = propertiesSignature(properties);
     propertiesLoading = false;
   }
 
-  async function saveSelectedServerProperties(): Promise<void> {
-    if (!selectedServerId) {
+  async function saveSelectedServerProperties(options?: { silent?: boolean }): Promise<void> {
+    const targetServerId = selectedServerId;
+    if (!targetServerId) {
+      return;
+    }
+
+    const normalized = normalizeProperties(properties);
+    const signature = JSON.stringify(normalized);
+    if (loadedForServer === targetServerId && signature === persistedPropertiesSignature) {
+      if (options?.silent !== true) {
+        propertiesSuccessMessage = t("settings_props_saved");
+      }
       return;
     }
 
     propertiesSaving = true;
     propertiesError = null;
-    propertiesSuccessMessage = null;
-    const success = await saveServerProperties(selectedServerId, normalizeProperties(properties));
+    if (!options?.silent) {
+      propertiesSuccessMessage = null;
+    }
+
+    const success = await saveServerProperties(targetServerId, normalized);
     propertiesSaving = false;
 
     if (success) {
-      propertiesSuccessMessage = t("settings_props_saved");
+      persistedPropertiesSignature = signature;
+      if (!options?.silent) {
+        propertiesSuccessMessage = t("settings_props_saved");
+      }
     } else {
       propertiesError = serverState.error ?? t("error_title");
     }
@@ -272,6 +291,41 @@
     if (selectedServerId && loadedForServer !== selectedServerId) {
       void reloadSelectedServerProperties();
     }
+  });
+
+  $effect(() => {
+    if (!selectedServerId || loadedForServer !== selectedServerId || propertiesLoading) {
+      if (autosaveTimer) {
+        clearTimeout(autosaveTimer);
+        autosaveTimer = null;
+      }
+      return;
+    }
+
+    const signature = propertiesSignature(properties);
+    if (signature === persistedPropertiesSignature) {
+      if (autosaveTimer) {
+        clearTimeout(autosaveTimer);
+        autosaveTimer = null;
+      }
+      return;
+    }
+
+    if (autosaveTimer) {
+      clearTimeout(autosaveTimer);
+    }
+
+    autosaveTimer = setTimeout(() => {
+      autosaveTimer = null;
+      void saveSelectedServerProperties({ silent: true });
+    }, 450);
+
+    return () => {
+      if (autosaveTimer) {
+        clearTimeout(autosaveTimer);
+        autosaveTimer = null;
+      }
+    };
   });
 </script>
 
@@ -602,26 +656,11 @@
           >
             {t("settings_reload_props")}
           </button>
-          <button
-            type="button"
-            class="btn btn-primary"
-            onclick={() => {
-              void saveSelectedServerProperties();
-            }}
-            disabled={propertiesLoading || propertiesSaving}
-          >
-            {propertiesSaving ? t("action_saving") : t("settings_save_props")}
-          </button>
         </div>
       </div>
     {/if}
   </section>
 
-  <div class="settings-actions">
-    <button type="button" class="btn btn-primary" disabled={settingsState.saving} onclick={onSaveSettings}>
-      {settingsState.saving ? t("action_saving") : t("action_save")}
-    </button>
-  </div>
 </section>
 
 <style>
@@ -662,11 +701,6 @@
   .ram-slider {
     width: 100%;
     accent-color: var(--accent);
-  }
-
-  .settings-actions {
-    display: flex;
-    justify-content: flex-end;
   }
 
   .server-properties {

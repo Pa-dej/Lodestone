@@ -382,9 +382,33 @@ export async function restartServer(id: string): Promise<void> {
   try {
     await invoke("stop_server", { id });
     clearServerCommandsCache(id);
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const waitForRunningState = async (
+      expectedRunning: boolean,
+      timeoutMs = 20000,
+      pollMs = 250,
+    ): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        await loadServers();
+        const server = serverState.servers.find((item) => item.id === id);
+        if (!server) {
+          return false;
+        }
+        if (server.running === expectedRunning) {
+          return true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
+      }
+      return false;
+    };
+
+    const stopped = await waitForRunningState(false);
+    if (!stopped) {
+      throw new Error("Timed out waiting for server to stop before restart");
+    }
+
     await invoke("start_server", { id });
-    await loadServers();
+    await waitForRunningState(true, 12000, 250);
   } catch (error) {
     setServerError(error);
   } finally {

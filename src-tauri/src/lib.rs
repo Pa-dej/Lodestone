@@ -1554,12 +1554,8 @@ fn escape_toml_string(value: &str) -> String {
         .replace('\r', " ")
 }
 
-fn escape_yaml_double_quoted(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', " ")
-        .replace('\r', " ")
+fn escape_yaml_single_quoted(value: &str) -> String {
+    value.replace('\'', "''").replace('\n', " ").replace('\r', " ")
 }
 
 fn default_rcon_port(server_port: u16) -> u16 {
@@ -1623,12 +1619,12 @@ async fn write_proxy_bootstrap_files(
         return Ok(());
     }
 
-    if core == "waterfall" || core == "bungeecord" {
-        let escaped_motd = escape_yaml_double_quoted(motd);
+    if core == "bungeecord" {
+        let escaped_motd = escape_yaml_single_quoted(motd);
         let body = format!(
             "listeners:\n\
-             - query_port: {port}\n\
-               motd: \"{escaped_motd}\"\n\
+             - host: 0.0.0.0:{port}\n\
+               motd: '{escaped_motd}'\n\
                tab_list: GLOBAL_PING\n\
                query_enabled: false\n\
                proxy_protocol: false\n\
@@ -1636,7 +1632,56 @@ async fn write_proxy_bootstrap_files(
                priorities:\n\
                  - lobby\n\
                bind_local_address: true\n\
+               max_players: 100\n\
+               tab_size: 60\n\
+               force_default_server: false\n\
+             remote_ping_cache: -1\n\
+             network_compression_threshold: 256\n\
+             permissions:\n\
+               default:\n\
+                 - bungeecord.command.server\n\
+                 - bungeecord.command.list\n\
+               admin:\n\
+                 - bungeecord.command.alert\n\
+                 - bungeecord.command.end\n\
+             log_pings: true\n\
+             connection_throttle_limit: 3\n\
+             prevent_proxy_connections: false\n\
+             timeout: 30000\n\
+             player_limit: -1\n\
+             ip_forward: true\n\
+             groups:\n\
+               md_5:\n\
+                 - admin\n\
+             remote_ping_timeout: 5000\n\
+             connection_throttle: 4000\n\
+             log_commands: false\n\
+             online_mode: true\n\
+             forge_support: true\n\
+             disabled_commands:\n\
+               - disabledcommandhere\n"
+        );
+        let config_path = server_dir.join("config.yml");
+        tokio_fs::write(&config_path, body)
+            .await
+            .map_err(|err| format!("Failed to write {}: {err}", config_path.display()))?;
+        return Ok(());
+    }
+
+    if core == "waterfall" {
+        let escaped_motd = escape_yaml_single_quoted(motd);
+        let body = format!(
+            "listeners:\n\
+             - query_port: {port}\n\
                host: 0.0.0.0:{port}\n\
+               motd: '{escaped_motd}'\n\
+               tab_list: GLOBAL_PING\n\
+               query_enabled: false\n\
+               proxy_protocol: false\n\
+               ping_passthrough: false\n\
+               priorities:\n\
+                 - lobby\n\
+               bind_local_address: true\n\
                max_players: 100\n\
                tab_size: 60\n\
                force_default_server: false\n\
@@ -1779,7 +1824,7 @@ async fn sync_proxy_runtime_config(
         return Ok(());
     }
 
-    if core == "waterfall" || core == "bungeecord" {
+    if core == "bungeecord" {
         let path = server_dir.join("config.yml");
         let existing = if path.exists() {
             tokio_fs::read_to_string(&path)
@@ -1806,15 +1851,54 @@ async fn sync_proxy_runtime_config(
             "host:",
             &format!("host: 0.0.0.0:{port}"),
         );
-        let with_query_port = replace_or_append_prefixed_line(
+        let with_motd = replace_or_append_prefixed_line(
             &with_host,
+            "motd:",
+            &format!("motd: '{}'", escape_yaml_single_quoted(&final_motd)),
+        );
+
+        tokio_fs::write(&path, with_motd)
+            .await
+            .map_err(|err| format!("Failed to write {}: {err}", path.display()))?;
+        return Ok(());
+    }
+
+    if core == "waterfall" {
+        let path = server_dir.join("config.yml");
+        let existing = if path.exists() {
+            tokio_fs::read_to_string(&path)
+                .await
+                .map_err(|err| format!("Failed to read {}: {err}", path.display()))?
+        } else {
+            String::new()
+        };
+
+        let final_motd = sanitized_property_value(
+            motd_override.unwrap_or(
+                extract_bungee_like_motd(&existing)
+                    .as_deref()
+                    .unwrap_or(default_motd),
+            ),
+        );
+
+        if existing.trim().is_empty() {
+            return write_proxy_bootstrap_files(server_dir, core, port, &final_motd).await;
+        }
+
+        let with_query_port = replace_or_append_prefixed_line(
+            &existing,
             "query_port:",
             &format!("query_port: {port}"),
         );
-        let with_motd = replace_or_append_prefixed_line(
+        let with_host = replace_or_append_prefixed_line(
             &with_query_port,
+            "host:",
+            &format!("host: 0.0.0.0:{port}"),
+        );
+        let with_motd = replace_or_append_prefixed_line(
+            &with_host,
             "motd:",
-            &format!("motd: \"{}\"", escape_yaml_double_quoted(&final_motd)),
+            &format!("motd: '{}'", escape_yaml_single_quoted(&final_motd)),
         );
 
         tokio_fs::write(&path, with_motd)

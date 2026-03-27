@@ -31,7 +31,7 @@ export interface NewServerConfig {
   port: number;
   ram_mb: number;
   jvm_args: string;
-  properties: ServerPropertiesConfig;
+  properties?: ServerPropertiesConfig;
 }
 
 export interface UpdateServerProfileConfig {
