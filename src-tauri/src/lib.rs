@@ -23,7 +23,7 @@ use std::os::unix::process::CommandExt;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tokio::{
     fs as tokio_fs,
-    io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     process::{Child, ChildStdin, Command},
     sync::{mpsc, Mutex as AsyncMutex},
 };
@@ -2186,21 +2186,62 @@ where
     R: AsyncRead + Send + Unpin + 'static,
 {
     tokio::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
-        while let Ok(Some(raw_line)) = lines.next_line().await {
-            let cleaned = strip_log_prefix(&raw_line);
-            let line: Arc<str> = cleaned.into();
+        let mut reader = reader;
+        let mut raw_buf = [0u8; 4096];
+        let mut line_buf: Vec<u8> = Vec::with_capacity(256);
 
-            let timestamp = now_timestamp_secs();
-
-            let event = ConsoleEvent::Line {
-                server_id: server_id.clone(),
-                line,
-                timestamp,
+        loop {
+            let read_bytes = match reader.read(&mut raw_buf).await {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
             };
 
+            for &byte in &raw_buf[..read_bytes] {
+                if byte == b'\n' || byte == b'\r' {
+                    if line_buf.is_empty() {
+                        continue;
+                    }
+
+                    let raw_line = String::from_utf8_lossy(&line_buf);
+                    let cleaned = strip_log_prefix(&raw_line).trim();
+                    if cleaned.is_empty() {
+                        line_buf.clear();
+                        continue;
+                    }
+                    let line: Arc<str> = cleaned.into();
+
+                    let event = ConsoleEvent::Line {
+                        server_id: server_id.clone(),
+                        line,
+                        timestamp: now_timestamp_secs(),
+                    };
+
+                    if console_tx.send(event).await.is_err() {
+                        return;
+                    }
+
+                    line_buf.clear();
+                } else {
+                    line_buf.push(byte);
+                }
+            }
+        }
+
+        if !line_buf.is_empty() {
+            let raw_line = String::from_utf8_lossy(&line_buf);
+            let cleaned = strip_log_prefix(&raw_line).trim();
+            if cleaned.is_empty() {
+                return;
+            }
+            let line: Arc<str> = cleaned.into();
+            let event = ConsoleEvent::Line {
+                server_id,
+                line,
+                timestamp: now_timestamp_secs(),
+            };
             if console_tx.send(event).await.is_err() {
-                break;
+                return;
             }
         }
     });
@@ -2278,11 +2319,7 @@ fn strip_log_prefix(line: &str) -> &str {
         }
     }
 
-    if pos < line.len() {
-        &line[pos..]
-    } else {
-        line
-    }
+    if pos < line.len() { &line[pos..] } else { "" }
 }
 
 #[cfg(unix)]
@@ -2311,7 +2348,11 @@ fn spawn_pty_reader(
                     }
 
                     let raw_line = String::from_utf8_lossy(&line_buf);
-                    let cleaned = strip_log_prefix(&raw_line);
+                    let cleaned = strip_log_prefix(&raw_line).trim();
+                    if cleaned.is_empty() {
+                        line_buf.clear();
+                        continue;
+                    }
                     let line: Arc<str> = cleaned.into();
 
                     let event = ConsoleEvent::Line {
@@ -2750,7 +2791,16 @@ async fn start_server(
     command
         .current_dir(&server.path)
         .arg(format!("-Xms{ram_mb}M"))
-        .arg(format!("-Xmx{ram_mb}M"));
+        .arg(format!("-Xmx{ram_mb}M"))
+        .arg("-Dfile.encoding=UTF-8")
+        .arg("-Dsun.stdout.encoding=UTF-8")
+        .arg("-Dsun.stderr.encoding=UTF-8");
+
+    if server.core.eq_ignore_ascii_case("velocity") {
+        command
+            .arg("-Dterminal.jline=false")
+            .arg("-Dterminal.ansi=false");
+    }
 
     #[cfg(not(unix))]
     {
@@ -2900,7 +2950,11 @@ async fn stop_server(state: State<'_, AppState>, id: String) -> Result<(), Strin
     };
 
     let stop_command = map_proxy_command(&server.core, "stop");
+    #[cfg(unix)]
     let command_bytes = format!("{stop_command}\n");
+
+    #[cfg(not(unix))]
+    let command_bytes = format!("{stop_command}\r\n");
 
     #[cfg(unix)]
     server
@@ -3250,7 +3304,11 @@ async fn send_command(
     };
 
     let effective_command = map_proxy_command(&server.core, normalized_command);
+    #[cfg(unix)]
     let cmd_bytes = format!("{effective_command}\n");
+
+    #[cfg(not(unix))]
+    let cmd_bytes = format!("{effective_command}\r\n");
 
     #[cfg(unix)]
     server

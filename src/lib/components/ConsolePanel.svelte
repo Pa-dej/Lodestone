@@ -441,6 +441,7 @@
     gap: 10px;
     height: 100%;
     min-height: 420px;
+    min-width: 0;
   }
 
   .empty-panel {
@@ -458,6 +459,7 @@
     justify-content: space-between;
     align-items: center;
     gap: 12px;
+    min-width: 0;
   }
 
   .console-sub {
@@ -469,6 +471,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .badge-running {
@@ -535,10 +539,12 @@
     grid-template-columns: 1fr auto;
     gap: 8px;
     position: relative;
+    min-width: 0;
   }
 
   .command-input-container {
     position: relative;
+    min-width: 0;
   }
 
   .completions-popup {
@@ -611,6 +617,27 @@
   .command-hint {
     color: var(--text-hint);
     font-size: 11px;
+  }
+
+  @media (max-width: 760px) {
+    .console-header {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .console-controls {
+      width: 100%;
+      justify-content: flex-start;
+    }
+
+    .command-row {
+      grid-template-columns: 1fr;
+    }
+
+    .command-row > .btn {
+      width: 100%;
+    }
   }
 
   /* ANSI blink animation */

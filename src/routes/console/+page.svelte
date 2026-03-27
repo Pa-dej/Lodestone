@@ -268,16 +268,19 @@
     grid-template-rows: auto 1fr;
     gap: 12px;
     min-height: calc(100vh - 92px);
+    min-width: 0;
+    width: 100%;
   }
 
   .tabs-bar {
     padding: 8px;
     overflow: visible;
+    min-width: 0;
+    width: 100%;
   }
 
   .tabs-track {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    display: flex;
     align-items: center;
     gap: 8px;
     width: 100%;
@@ -287,13 +290,16 @@
   .tab-list {
     display: flex;
     align-items: center;
+    flex-wrap: nowrap;
     gap: 8px;
+    flex: 1 1 auto;
     overflow-x: auto;
     overflow-y: hidden;
     padding-bottom: 2px;
     width: 100%;
     min-width: 0;
-    max-width: none;
+    max-width: 100%;
+    overscroll-behavior-x: contain;
   }
 
   .empty-tabs {
@@ -322,8 +328,8 @@
     gap: 8px;
     cursor: pointer;
     transition: border-color var(--tr), color var(--tr), background var(--tr);
-    min-width: clamp(140px, 24vw, 240px);
-    max-width: min(48vw, 280px);
+    min-width: clamp(118px, 20vw, 220px);
+    max-width: min(42vw, 260px);
     box-shadow: none;
   }
 
@@ -392,11 +398,12 @@
 
   .console-body {
     min-height: 0;
+    min-width: 0;
   }
 
   .tab-picker {
     position: relative;
-    justify-self: end;
+    flex: 0 0 auto;
   }
 
   .picker-toggle {
@@ -561,8 +568,8 @@
 
   @media (max-width: 860px) {
     .console-tab {
-      min-width: clamp(120px, 44vw, 200px);
-      max-width: min(62vw, 220px);
+      min-width: clamp(104px, 38vw, 184px);
+      max-width: min(58vw, 198px);
       height: 34px;
       padding-inline: 10px;
       gap: 6px;
@@ -591,6 +598,28 @@
     .tab-picker-menu {
       width: min(88vw, 360px);
       right: -4px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .tabs-bar {
+      padding: 6px;
+    }
+
+    .tab-list {
+      gap: 6px;
+    }
+
+    .console-tab {
+      min-width: 96px;
+      max-width: 62vw;
+      height: 32px;
+      padding-inline: 8px;
+      gap: 5px;
+    }
+
+    .tab-close {
+      opacity: 1;
     }
   }
 </style>

@@ -33,6 +33,7 @@ interface ServerStoreState {
 
 const MAX_CONSOLE_LINES = 2500;
 const FALLBACK_SERVER_COMMANDS = ["help", "list", "stop", "save-all", "reload", "restart"];
+const SERVER_ORDER_STORAGE_KEY = "lodestone-server-order";
 
 interface ConsoleBatch {
   server_id: string;
@@ -72,17 +73,81 @@ function setServerError(error: unknown): void {
   serverState.error = error instanceof Error ? error.message : String(error);
 }
 
-function syncServerOrder(servers: ServerConfig[]): void {
-  if (serverState.serverOrder.length === 0) {
-    serverState.serverOrder = servers.map((server) => server.id);
+function readPersistedServerOrder(): string[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const raw = localStorage.getItem(SERVER_ORDER_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    for (const value of parsed) {
+      if (typeof value !== "string") {
+        continue;
+      }
+      const id = value.trim();
+      if (!id || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      ordered.push(id);
+    }
+    return ordered;
+  } catch {
+    return [];
+  }
+}
+
+function persistServerOrder(order: string[]): void {
+  if (typeof window === "undefined") {
     return;
   }
 
-  const ids = new Set(servers.map((server) => server.id));
-  const existing = serverState.serverOrder.filter((id) => ids.has(id));
-  const existingSet = new Set(existing);
-  const appended = servers.map((server) => server.id).filter((id) => !existingSet.has(id));
-  serverState.serverOrder = [...existing, ...appended];
+  try {
+    localStorage.setItem(SERVER_ORDER_STORAGE_KEY, JSON.stringify(order));
+  } catch {
+    // Ignore storage failures (private mode, quota, etc.)
+  }
+}
+
+function mergeServerOrder(order: string[], servers: ServerConfig[]): string[] {
+  const existingIds = new Set(servers.map((server) => server.id));
+  const seen = new Set<string>();
+  const filtered: string[] = [];
+
+  for (const id of order) {
+    if (existingIds.has(id) && !seen.has(id)) {
+      seen.add(id);
+      filtered.push(id);
+    }
+  }
+
+  const missing = servers.map((server) => server.id).filter((id) => !seen.has(id));
+  return [...filtered, ...missing];
+}
+
+function syncServerOrder(servers: ServerConfig[]): void {
+  if (serverState.serverOrder.length === 0) {
+    const persisted = readPersistedServerOrder();
+    serverState.serverOrder = mergeServerOrder(
+      persisted.length > 0 ? persisted : servers.map((server) => server.id),
+      servers,
+    );
+    persistServerOrder(serverState.serverOrder);
+    return;
+  }
+
+  serverState.serverOrder = mergeServerOrder(serverState.serverOrder, servers);
+  persistServerOrder(serverState.serverOrder);
 }
 
 function uniqueVersions(versions: string[]): string[] {
@@ -527,13 +592,8 @@ export function isServerRestarting(id: string): boolean {
 }
 
 export function updateServerOrder(newOrder: string[]): void {
-  const existingIds = new Set(serverState.servers.map((server) => server.id));
-  const filtered = newOrder.filter((id) => existingIds.has(id));
-  const filteredSet = new Set(filtered);
-  const missing = serverState.servers
-    .map((server) => server.id)
-    .filter((id) => !filteredSet.has(id));
-  serverState.serverOrder = [...filtered, ...missing];
+  serverState.serverOrder = mergeServerOrder(newOrder, serverState.servers);
+  persistServerOrder(serverState.serverOrder);
 }
 
 export function getOrderedServers(): ServerConfig[] {
