@@ -41,6 +41,8 @@ const MAX_CONSOLE_LINES: usize = 50;
 const CONSOLE_CHANNEL_SIZE: usize = 64;
 const BATCH_SIZE: usize = 8;
 const BATCH_INTERVAL_MS: u64 = 8;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 const BASE_MINECRAFT_COMMANDS: &[&str] = &[
     "help",
     "list",
@@ -1237,6 +1239,10 @@ async fn run_java_command(
 ) -> Result<(), String> {
     let mut command = Command::new(java_exec(settings));
     command.current_dir(cwd).args(args);
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     let output = command
         .output()
         .await
@@ -2915,6 +2921,11 @@ async fn start_server(
 
     #[cfg(not(unix))]
     {
+        #[cfg(target_os = "windows")]
+        {
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         if !is_proxy_core(&server.core) {
             command
